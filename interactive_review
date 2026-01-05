@@ -1,0 +1,375 @@
+"""
+HSM Database Russian Files - Interactive Pattern Review Tool
+Shows unique patterns/contexts around 'rus' for user review and filtering
+"""
+
+import tkinter as tk
+from tkinter import filedialog
+import os
+from datetime import datetime
+import re
+from collections import defaultdict
+
+
+def select_file():
+    """Open file dialog to select HSM file or previous results file"""
+    root = tk.Tk()
+    root.withdraw()
+    
+    file_path = filedialog.askopenfilename(
+        title="Select File (HSM database or previous VALID results)",
+        filetypes=[
+            ("Text files", "*.txt"),
+            ("HSM files", "*.hsm"),
+            ("All files", "*.*")
+        ]
+    )
+    
+    root.destroy()
+    return file_path
+
+
+def extract_rus_context(line, context_length=15):
+    """
+    Extract the context around 'rus' occurrences in a line
+    
+    Args:
+        line: Line to search
+        context_length: Number of characters to extract on each side of 'rus'
+    
+    Returns:
+        list: List of context strings around each 'rus' occurrence
+    """
+    contexts = []
+    line_lower = line.lower()
+    
+    # Find all occurrences of 'rus'
+    start = 0
+    while True:
+        pos = line_lower.find('rus', start)
+        if pos == -1:
+            break
+        
+        # Extract context (preserve original case from original line)
+        context_start = max(0, pos - context_length)
+        context_end = min(len(line), pos + 3 + context_length)
+        
+        context = line[context_start:context_end]
+        
+        # Mark where 'rus' is in the context
+        rus_start_in_context = pos - context_start
+        marked_context = (
+            context[:rus_start_in_context] + 
+            ">>>RUS<<<" + 
+            context[rus_start_in_context + 3:]
+        )
+        
+        contexts.append(marked_context.strip())
+        start = pos + 1
+    
+    return contexts
+
+
+def analyze_patterns(input_file):
+    """
+    Analyze all patterns around 'rus' in the file
+    
+    Args:
+        input_file: Path to input file
+    
+    Returns:
+        dict: Pattern -> list of (line_number, full_line) tuples
+    """
+    print(f"\nAnalyzing patterns in: {input_file}")
+    print("This may take a moment...\n")
+    
+    pattern_examples = defaultdict(list)
+    total_lines = 0
+    lines_with_rus = 0
+    
+    try:
+        with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                total_lines += 1
+                
+                # Skip header lines if this is a previous results file
+                if line.startswith('Line ') and ':' in line and line_num > 5:
+                    # Extract original line from results file format
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        line = parts[1].strip()
+                
+                if 'rus' in line.lower():
+                    lines_with_rus += 1
+                    contexts = extract_rus_context(line)
+                    
+                    for context in contexts:
+                        # Store max 3 examples per pattern to avoid memory issues
+                        if len(pattern_examples[context]) < 3:
+                            pattern_examples[context].append((line_num, line.rstrip('\n')))
+                
+                if line_num % 100000 == 0:
+                    print(f"  Processed {line_num:,} lines...")
+    
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return {}
+    
+    print(f"\nAnalysis complete!")
+    print(f"Total lines: {total_lines:,}")
+    print(f"Lines with 'rus': {lines_with_rus:,}")
+    print(f"Unique patterns found: {len(pattern_examples):,}")
+    
+    return pattern_examples
+
+
+def interactive_review(pattern_examples):
+    """
+    Interactively review patterns with user
+    
+    Args:
+        pattern_examples: Dict of pattern -> list of examples
+    
+    Returns:
+        tuple: (valid_patterns set, invalid_patterns set)
+    """
+    valid_patterns = set()
+    invalid_patterns = set()
+    
+    patterns_list = sorted(pattern_examples.keys())
+    total_patterns = len(patterns_list)
+    
+    print("\n" + "=" * 80)
+    print("INTERACTIVE PATTERN REVIEW")
+    print("=" * 80)
+    print("\nFor each pattern, you'll see examples of how 'rus' appears in context.")
+    print("Mark each pattern as:")
+    print("  [V] Valid (Russian-related)")
+    print("  [I] Invalid (false positive)")
+    print("  [S] Skip (review later)")
+    print("  [Q] Quit (save progress and exit)")
+    print("\nLet's begin!\n")
+    
+    for idx, pattern in enumerate(patterns_list, 1):
+        examples = pattern_examples[pattern]
+        
+        print("=" * 80)
+        print(f"Pattern {idx}/{total_patterns} (appears in {len(examples)} sample lines)")
+        print("-" * 80)
+        print(f"Context: {pattern}")
+        print("-" * 80)
+        print("Example lines:")
+        for i, (line_num, full_line) in enumerate(examples[:3], 1):
+            # Truncate very long lines
+            display_line = full_line if len(full_line) <= 100 else full_line[:97] + "..."
+            print(f"  {i}. {display_line}")
+        print("-" * 80)
+        
+        while True:
+            response = input("Mark as [V]alid / [I]nvalid / [S]kip / [Q]uit: ").strip().upper()
+            
+            if response == 'V':
+                valid_patterns.add(pattern)
+                print("✓ Marked as VALID (Russian-related)\n")
+                break
+            elif response == 'I':
+                invalid_patterns.add(pattern)
+                print("✗ Marked as INVALID (false positive)\n")
+                break
+            elif response == 'S':
+                print("⊙ Skipped for later review\n")
+                break
+            elif response == 'Q':
+                print("\n" + "=" * 80)
+                print("Quitting review...")
+                print("=" * 80)
+                return valid_patterns, invalid_patterns
+            else:
+                print("Invalid input. Please enter V, I, S, or Q.")
+    
+    print("\n" + "=" * 80)
+    print("Review complete!")
+    print("=" * 80)
+    
+    return valid_patterns, invalid_patterns
+
+
+def filter_by_patterns(input_file, valid_patterns, invalid_patterns, pattern_examples):
+    """
+    Filter the original file based on reviewed patterns
+    
+    Args:
+        input_file: Path to input file
+        valid_patterns: Set of patterns marked as valid
+        invalid_patterns: Set of patterns marked as invalid
+        pattern_examples: Original pattern examples dict
+    
+    Returns:
+        tuple: (valid_lines, invalid_lines, unreviewed_lines)
+    """
+    print("\nFiltering file based on your review...")
+    
+    valid_lines = []
+    invalid_lines = []
+    unreviewed_lines = []
+    
+    try:
+        with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                # Skip header lines if results file
+                if line.startswith('Line ') and ':' in line and line_num > 5:
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        line = parts[1].strip()
+                
+                if 'rus' not in line.lower():
+                    continue
+                
+                # Extract contexts for this line
+                contexts = extract_rus_context(line)
+                
+                # Check if any context matches our reviewed patterns
+                line_is_valid = False
+                line_is_invalid = False
+                
+                for context in contexts:
+                    if context in valid_patterns:
+                        line_is_valid = True
+                        break
+                    elif context in invalid_patterns:
+                        line_is_invalid = True
+                        break
+                
+                if line_is_valid:
+                    valid_lines.append((line_num, line.rstrip('\n')))
+                elif line_is_invalid:
+                    invalid_lines.append((line_num, line.rstrip('\n')))
+                else:
+                    unreviewed_lines.append((line_num, line.rstrip('\n')))
+    
+    except Exception as e:
+        print(f"Error filtering file: {e}")
+    
+    return valid_lines, invalid_lines, unreviewed_lines
+
+
+def save_filtered_results(valid_lines, invalid_lines, unreviewed_lines, input_file):
+    """Save filtered results to files"""
+    input_dir = os.path.dirname(input_file)
+    input_basename = os.path.basename(input_file)
+    input_name, input_ext = os.path.splitext(input_basename)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save valid lines
+    valid_file = os.path.join(input_dir, f"{input_name}_REVIEWED_VALID_{timestamp}.txt")
+    with open(valid_file, 'w', encoding='utf-8') as f:
+        f.write(f"VALID Russian entries (after interactive review)\n")
+        f.write(f"Source: {input_basename}\n")
+        f.write(f"Review date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total valid: {len(valid_lines)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for line_num, line in valid_lines:
+            f.write(f"Line {line_num}: {line}\n")
+    
+    # Save invalid lines
+    invalid_file = os.path.join(input_dir, f"{input_name}_REVIEWED_INVALID_{timestamp}.txt")
+    with open(invalid_file, 'w', encoding='utf-8') as f:
+        f.write(f"INVALID entries (marked as false positives in review)\n")
+        f.write(f"Source: {input_basename}\n")
+        f.write(f"Review date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total invalid: {len(invalid_lines)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for line_num, line in invalid_lines:
+            f.write(f"Line {line_num}: {line}\n")
+    
+    # Save unreviewed lines (if any)
+    unreviewed_file = None
+    if unreviewed_lines:
+        unreviewed_file = os.path.join(input_dir, f"{input_name}_UNREVIEWED_{timestamp}.txt")
+        with open(unreviewed_file, 'w', encoding='utf-8') as f:
+            f.write(f"UNREVIEWED entries (skipped during review)\n")
+            f.write(f"Source: {input_basename}\n")
+            f.write(f"Review date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total unreviewed: {len(unreviewed_lines)}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            for line_num, line in unreviewed_lines:
+                f.write(f"Line {line_num}: {line}\n")
+    
+    return valid_file, invalid_file, unreviewed_file
+
+
+def main():
+    """Main execution"""
+    print("=" * 80)
+    print("HSM DATABASE - INTERACTIVE PATTERN REVIEW TOOL")
+    print("=" * 80)
+    
+    # Select file
+    input_file = select_file()
+    
+    if not input_file:
+        print("\nNo file selected. Exiting.")
+        return
+    
+    if not os.path.exists(input_file):
+        print(f"\nError: File not found: {input_file}")
+        return
+    
+    # Analyze patterns
+    pattern_examples = analyze_patterns(input_file)
+    
+    if not pattern_examples:
+        print("\nNo patterns found or error occurred. Exiting.")
+        return
+    
+    # Interactive review
+    valid_patterns, invalid_patterns = interactive_review(pattern_examples)
+    
+    # Show review summary
+    print("\n" + "=" * 80)
+    print("REVIEW SUMMARY")
+    print("=" * 80)
+    print(f"Patterns marked VALID: {len(valid_patterns)}")
+    print(f"Patterns marked INVALID: {len(invalid_patterns)}")
+    print(f"Patterns UNREVIEWED: {len(pattern_examples) - len(valid_patterns) - len(invalid_patterns)}")
+    
+    if not valid_patterns and not invalid_patterns:
+        print("\nNo patterns were reviewed. No filtering will be applied.")
+        print("Exiting.")
+        return
+    
+    # Filter file based on review
+    valid_lines, invalid_lines, unreviewed_lines = filter_by_patterns(
+        input_file, valid_patterns, invalid_patterns, pattern_examples
+    )
+    
+    # Save results
+    print("\n" + "=" * 80)
+    print("FILTERING RESULTS")
+    print("=" * 80)
+    print(f"Valid Russian entries: {len(valid_lines)}")
+    print(f"Invalid (false positives): {len(invalid_lines)}")
+    print(f"Unreviewed entries: {len(unreviewed_lines)}")
+    
+    valid_file, invalid_file, unreviewed_file = save_filtered_results(
+        valid_lines, invalid_lines, unreviewed_lines, input_file
+    )
+    
+    print(f"\n📁 Files saved:")
+    print(f"   VALID: {valid_file}")
+    print(f"   INVALID: {invalid_file}")
+    if unreviewed_file:
+        print(f"   UNREVIEWED: {unreviewed_file}")
+    
+    print("\n" + "=" * 80)
+    print("Interactive review complete!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
+    input("\nPress Enter to exit...")
