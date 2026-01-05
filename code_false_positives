@@ -1,0 +1,225 @@
+"""
+HSM Database Russian Files Finder - Version 2 (with False Positive Filtering)
+Searches through HSM database file for entries containing 'rus' (case-insensitive)
+and filters out known false positives like 'cyprus', 'brunei_darussalam', etc.
+"""
+
+import tkinter as tk
+from tkinter import filedialog
+import os
+from datetime import datetime
+import re
+
+
+# List of known false positive patterns to exclude
+FALSE_POSITIVES = [
+    'cyprus',
+    'brunei',
+    'darussalam',
+    'prussia',
+    'belarus',
+    'virus',
+    'trust',
+    'thrust',
+    'cruise',
+    'bruise',
+    'perusal',
+    'scrutiny',
+    'intrusion',
+    'extrusion',
+    'obtrusive',
+]
+
+
+def select_file():
+    """Open file dialog to select HSM file"""
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    
+    file_path = filedialog.askopenfilename(
+        title="Select HSM Database File",
+        filetypes=[
+            ("HSM files", "*.hsm"),
+            ("Text files", "*.txt"),
+            ("All files", "*.*")
+        ]
+    )
+    
+    root.destroy()
+    return file_path
+
+
+def contains_false_positive(line):
+    """
+    Check if line contains any false positive patterns
+    
+    Args:
+        line: Line content to check
+    
+    Returns:
+        tuple: (bool, list of matched false positives)
+    """
+    line_lower = line.lower()
+    matches = []
+    
+    for pattern in FALSE_POSITIVES:
+        if pattern in line_lower:
+            matches.append(pattern)
+    
+    return len(matches) > 0, matches
+
+
+def search_russian_entries(input_file):
+    """
+    Search for lines containing 'rus' (case-insensitive) in the HSM file,
+    excluding false positives
+    
+    Args:
+        input_file: Path to the input HSM file
+    
+    Returns:
+        tuple: (matching_lines list, excluded_lines list, total_count)
+    """
+    matching_lines = []
+    excluded_lines = []
+    total_lines = 0
+    initial_matches = 0
+    
+    print(f"\nSearching file: {input_file}")
+    print("This may take a moment with large files...")
+    
+    try:
+        with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                total_lines += 1
+                
+                # Case-insensitive search for 'rus'
+                if 'rus' in line.lower():
+                    initial_matches += 1
+                    
+                    # Check for false positives
+                    is_false_positive, fp_matches = contains_false_positive(line)
+                    
+                    if is_false_positive:
+                        excluded_lines.append((line_num, line.rstrip('\n'), fp_matches))
+                    else:
+                        matching_lines.append((line_num, line.rstrip('\n')))
+                
+                # Progress indicator every 100k lines
+                if line_num % 100000 == 0:
+                    print(f"  Processed {line_num:,} lines... ({initial_matches} initial matches, "
+                          f"{len(matching_lines)} valid, {len(excluded_lines)} excluded)")
+    
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return [], [], 0
+    
+    print(f"\nCompleted! Processed {total_lines:,} total lines")
+    return matching_lines, excluded_lines, total_lines
+
+
+def save_results(matching_lines, excluded_lines, input_file):
+    """
+    Save matching lines and excluded lines to separate files
+    
+    Args:
+        matching_lines: List of tuples (line_number, line_content)
+        excluded_lines: List of tuples (line_number, line_content, false_positive_matches)
+        input_file: Original input file path
+    
+    Returns:
+        tuple: (valid_output_file, excluded_output_file)
+    """
+    input_dir = os.path.dirname(input_file)
+    input_basename = os.path.basename(input_file)
+    input_name, input_ext = os.path.splitext(input_basename)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save valid Russian matches
+    valid_output_file = os.path.join(input_dir, f"{input_name}_russian_VALID_{timestamp}.txt")
+    
+    with open(valid_output_file, 'w', encoding='utf-8') as f:
+        f.write(f"VALID Russian entries found in: {input_basename}\n")
+        f.write(f"Search performed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total valid matches: {len(matching_lines)}\n")
+        f.write(f"Excluded false positives: {len(excluded_lines)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for line_num, line_content in matching_lines:
+            f.write(f"Line {line_num}: {line_content}\n")
+    
+    # Save excluded false positives (for review)
+    excluded_output_file = os.path.join(input_dir, f"{input_name}_russian_EXCLUDED_{timestamp}.txt")
+    
+    with open(excluded_output_file, 'w', encoding='utf-8') as f:
+        f.write(f"EXCLUDED entries (false positives) from: {input_basename}\n")
+        f.write(f"Search performed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total excluded: {len(excluded_lines)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for line_num, line_content, fp_matches in excluded_lines:
+            f.write(f"Line {line_num} [Matched: {', '.join(fp_matches)}]: {line_content}\n")
+    
+    return valid_output_file, excluded_output_file
+
+
+def main():
+    """Main execution function"""
+    print("=" * 80)
+    print("HSM DATABASE - RUSSIAN FILES FINDER v2 (with False Positive Filter)")
+    print("=" * 80)
+    print("\nFalse positive patterns that will be excluded:")
+    for i, pattern in enumerate(FALSE_POSITIVES, 1):
+        print(f"  {i}. {pattern}")
+    print()
+    
+    # Select file
+    input_file = select_file()
+    
+    if not input_file:
+        print("\nNo file selected. Exiting.")
+        return
+    
+    if not os.path.exists(input_file):
+        print(f"\nError: File not found: {input_file}")
+        return
+    
+    # Search for Russian entries
+    matching_lines, excluded_lines, total_lines = search_russian_entries(input_file)
+    
+    if total_lines == 0:
+        print("\nNo lines were processed. Please check the file.")
+        return
+    
+    # Display results
+    print("\n" + "=" * 80)
+    print("RESULTS")
+    print("=" * 80)
+    print(f"Total lines processed: {total_lines:,}")
+    print(f"Initial matches (containing 'rus'): {len(matching_lines) + len(excluded_lines):,}")
+    print(f"Valid Russian entries: {len(matching_lines):,}")
+    print(f"Excluded false positives: {len(excluded_lines):,}")
+    
+    if len(matching_lines) + len(excluded_lines) > 0:
+        print(f"Filtering efficiency: {(len(excluded_lines)/(len(matching_lines) + len(excluded_lines))*100):.1f}% "
+              f"of initial matches were false positives")
+    
+    # Save results
+    if matching_lines or excluded_lines:
+        valid_file, excluded_file = save_results(matching_lines, excluded_lines, input_file)
+        print(f"\n📁 VALID Russian entries saved to:\n   {valid_file}")
+        print(f"\n📁 EXCLUDED false positives saved to:\n   {excluded_file}")
+        print("\nYou can review both files - especially check the excluded file")
+        print("to ensure no valid Russian entries were mistakenly filtered out.")
+    else:
+        print("\nNo matching lines found. No output files created.")
+    
+    print("\n" + "=" * 80)
+    print("Analysis complete!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
+    input("\nPress Enter to exit...")
