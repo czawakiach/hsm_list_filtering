@@ -1,0 +1,151 @@
+"""
+HSM Database EU/RU Files Finder
+Searches specifically for entries containing 'eu/ru' pattern (case-insensitive)
+"""
+
+import tkinter as tk
+from tkinter import filedialog
+import os
+from datetime import datetime
+
+
+def select_file():
+    """Open file dialog to select HSM file"""
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    
+    file_path = filedialog.askopenfilename(
+        title="Select HSM Database File",
+        filetypes=[
+            ("HSM files", "*.hsm"),
+            ("Text files", "*.txt"),
+            ("All files", "*.*")
+        ]
+    )
+    
+    root.destroy()
+    return file_path
+
+
+def search_eu_ru_entries(input_file):
+    """
+    Search for lines containing 'eu/ru' (case-insensitive) in the HSM file
+    
+    Args:
+        input_file: Path to the input HSM file
+    
+    Returns:
+        tuple: (matching_lines list, total_count)
+    """
+    matching_lines = []
+    total_lines = 0
+    
+    print(f"\nSearching file: {input_file}")
+    print("Looking for pattern: 'eu/ru' (case-insensitive)")
+    print("This may take a moment with large files...")
+    
+    try:
+        with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                total_lines += 1
+                
+                # Case-insensitive search for 'eu/ru'
+                if 'eu/ru' in line.lower():
+                    matching_lines.append((line_num, line.rstrip('\n')))
+                
+                # Progress indicator every 100k lines
+                if line_num % 100000 == 0:
+                    print(f"  Processed {line_num:,} lines... ({len(matching_lines)} matches so far)")
+    
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return [], 0
+    
+    print(f"\nCompleted! Processed {total_lines:,} total lines")
+    return matching_lines, total_lines
+
+
+def save_results(matching_lines, input_file):
+    """
+    Save matching lines to a new file
+    
+    Args:
+        matching_lines: List of tuples (line_number, line_content)
+        input_file: Original input file path
+    
+    Returns:
+        str: Path to output file
+    """
+    # Create output filename
+    input_dir = os.path.dirname(input_file)
+    input_basename = os.path.basename(input_file)
+    input_name, input_ext = os.path.splitext(input_basename)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = os.path.join(input_dir, f"{input_name}_EU_RU_matches_{timestamp}.txt")
+    
+    # Write results
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"EU/RU entries found in: {input_basename}\n")
+        f.write(f"Search pattern: 'eu/ru' (case-insensitive)\n")
+        f.write(f"Search performed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total matches: {len(matching_lines)}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for line_num, line_content in matching_lines:
+            f.write(f"Line {line_num}: {line_content}\n")
+    
+    return output_file
+
+
+def main():
+    """Main execution function"""
+    print("=" * 80)
+    print("HSM DATABASE - EU/RU FILES FINDER")
+    print("=" * 80)
+    
+    # Select file
+    input_file = select_file()
+    
+    if not input_file:
+        print("\nNo file selected. Exiting.")
+        return
+    
+    if not os.path.exists(input_file):
+        print(f"\nError: File not found: {input_file}")
+        return
+    
+    # Search for EU/RU entries
+    matching_lines, total_lines = search_eu_ru_entries(input_file)
+    
+    if total_lines == 0:
+        print("\nNo lines were processed. Please check the file.")
+        return
+    
+    # Display results
+    print("\n" + "=" * 80)
+    print("RESULTS")
+    print("=" * 80)
+    print(f"Total lines processed: {total_lines:,}")
+    print(f"Lines containing 'eu/ru': {len(matching_lines):,}")
+    
+    if total_lines > 0:
+        print(f"Percentage: {(len(matching_lines)/total_lines*100):.4f}%")
+    
+    # Save results if matches found
+    if matching_lines:
+        output_file = save_results(matching_lines, input_file)
+        print(f"\n📁 Matching lines saved to:")
+        print(f"   {output_file}")
+        print("\nYou can now review this file manually.")
+    else:
+        print("\n❌ No matching lines found. No output file created.")
+    
+    print("\n" + "=" * 80)
+    print("Analysis complete!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
+    input("\nPress Enter to exit...")
