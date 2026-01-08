@@ -1,84 +1,192 @@
 #!/usr/bin/env python3
 """
-Compare two text files and find:
-1. Rows from small file that exist in large file
-2. Rows from small file that are unique (not in large file)
+GUI tool to compare two text files and find matching and unique entries.
 """
 
-def compare_files(small_file_path, large_file_path, output_prefix="results"):
-    """
-    Compare two files and identify matching and unique entries.
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+
+
+class FileComparerGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Comparison Tool")
+        self.root.geometry("700x600")
+        
+        self.small_file_path = None
+        self.large_file_path = None
+        self.output_dir = None
+        
+        self.setup_ui()
     
-    Args:
-        small_file_path: Path to the smaller file (~40 rows)
-        large_file_path: Path to the larger file (~1.7M rows)
-        output_prefix: Prefix for output files
-    """
-    print(f"Reading smaller file: {small_file_path}")
-    with open(small_file_path, 'r', encoding='utf-8') as f:
-        small_entries = set(line.strip() for line in f if line.strip())
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="File Comparison Tool", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        # Small file selection
+        ttk.Label(main_frame, text="Small file (~40 rows):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.small_file_label = ttk.Label(main_frame, text="No file selected", 
+                                          foreground="gray", wraplength=400)
+        self.small_file_label.grid(row=1, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_small_file).grid(row=1, column=2, padx=5)
+        
+        # Large file selection
+        ttk.Label(main_frame, text="Large file (~1.7M rows):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.large_file_label = ttk.Label(main_frame, text="No file selected", 
+                                          foreground="gray", wraplength=400)
+        self.large_file_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_large_file).grid(row=2, column=2, padx=5)
+        
+        # Output directory selection
+        ttk.Label(main_frame, text="Output directory:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.output_dir_label = ttk.Label(main_frame, text="Same as large file", 
+                                          foreground="gray", wraplength=400)
+        self.output_dir_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_output_dir).grid(row=3, column=2, padx=5)
+        
+        # Compare button
+        self.compare_button = ttk.Button(main_frame, text="Compare Files", 
+                                        command=self.start_comparison, state=tk.DISABLED)
+        self.compare_button.grid(row=4, column=0, columnspan=3, pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=400)
+        self.progress.grid(row=5, column=0, columnspan=3, pady=5)
+        
+        # Status/Results text area
+        ttk.Label(main_frame, text="Status / Results:").grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=80, wrap=tk.WORD)
+        self.status_text.grid(row=7, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(7, weight=1)
     
-    print(f"Found {len(small_entries)} unique entries in small file")
+    def select_small_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select small file (~40 rows)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.small_file_path = filepath
+            self.small_file_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
     
-    print(f"\nReading and comparing with large file: {large_file_path}")
-    matches = set()
-    large_row_count = 0
+    def select_large_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select large file (~1.7M rows)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.large_file_path = filepath
+            self.large_file_label.config(text=os.path.basename(filepath), foreground="black")
+            if not self.output_dir:
+                self.output_dir = os.path.dirname(filepath)
+                self.output_dir_label.config(text=self.output_dir, foreground="black")
+            self.check_ready()
     
-    # Read large file line by line to avoid memory issues
-    with open(large_file_path, 'r', encoding='utf-8') as f:
-        for i, line in enumerate(f, 1):
-            large_row_count = i
-            stripped = line.strip()
-            if stripped in small_entries:
-                matches.add(stripped)
+    def select_output_dir(self):
+        directory = filedialog.askdirectory(title="Select output directory")
+        if directory:
+            self.output_dir = directory
+            self.output_dir_label.config(text=directory, foreground="black")
+    
+    def check_ready(self):
+        if self.small_file_path and self.large_file_path:
+            self.compare_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_comparison(self):
+        self.compare_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        
+        # Run comparison in separate thread to keep GUI responsive
+        thread = threading.Thread(target=self.compare_files)
+        thread.start()
+    
+    def compare_files(self):
+        try:
+            self.log(f"Reading small file: {os.path.basename(self.small_file_path)}")
             
-            # Progress indicator every 100k lines
-            if i % 100000 == 0:
-                print(f"  Processed {i:,} rows... Found {len(matches)} matches so far")
-    
-    print(f"\nProcessed {large_row_count:,} rows from large file")
-    
-    # Calculate unique entries (in small file but not in large file)
-    unique_entries = small_entries - matches
-    
-    # Write results
-    matches_file = f"{output_prefix}_matches.txt"
-    unique_file = f"{output_prefix}_unique.txt"
-    
-    with open(matches_file, 'w', encoding='utf-8') as f:
-        for entry in sorted(matches):
-            f.write(entry + '\n')
-    
-    with open(unique_file, 'w', encoding='utf-8') as f:
-        for entry in sorted(unique_entries):
-            f.write(entry + '\n')
-    
-    # Print summary
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
-    print(f"Total entries in small file: {len(small_entries)}")
-    print(f"Entries found in large file: {len(matches)}")
-    print(f"Unique entries (not in large file): {len(unique_entries)}")
-    print(f"\nResults written to:")
-    print(f"  - {matches_file}")
-    print(f"  - {unique_file}")
-    print("="*60)
-    
-    return matches, unique_entries
+            with open(self.small_file_path, 'r', encoding='utf-8') as f:
+                small_entries = set(line.strip() for line in f if line.strip())
+            
+            self.log(f"Found {len(small_entries)} unique entries in small file\n")
+            
+            self.log(f"Reading and comparing with large file: {os.path.basename(self.large_file_path)}")
+            matches = set()
+            large_row_count = 0
+            
+            with open(self.large_file_path, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    large_row_count = i
+                    stripped = line.strip()
+                    if stripped in small_entries:
+                        matches.add(stripped)
+                    
+                    if i % 100000 == 0:
+                        self.log(f"  Processed {i:,} rows... Found {len(matches)} matches so far")
+            
+            self.log(f"\nProcessed {large_row_count:,} rows from large file")
+            
+            unique_entries = small_entries - matches
+            
+            # Write results
+            base_name = os.path.splitext(os.path.basename(self.small_file_path))[0]
+            matches_file = os.path.join(self.output_dir, f"{base_name}_matches.txt")
+            unique_file = os.path.join(self.output_dir, f"{base_name}_unique.txt")
+            
+            with open(matches_file, 'w', encoding='utf-8') as f:
+                for entry in sorted(matches):
+                    f.write(entry + '\n')
+            
+            with open(unique_file, 'w', encoding='utf-8') as f:
+                for entry in sorted(unique_entries):
+                    f.write(entry + '\n')
+            
+            # Print summary
+            self.log("\n" + "="*60)
+            self.log("SUMMARY")
+            self.log("="*60)
+            self.log(f"Total entries in small file: {len(small_entries)}")
+            self.log(f"Entries found in large file: {len(matches)}")
+            self.log(f"Unique entries (not in large file): {len(unique_entries)}")
+            self.log(f"\nResults written to:")
+            self.log(f"  - {matches_file}")
+            self.log(f"  - {unique_file}")
+            self.log("="*60)
+            
+            messagebox.showinfo("Success", "Comparison completed successfully!")
+            
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        
+        finally:
+            self.progress.stop()
+            self.compare_button.config(state=tk.NORMAL)
+
+
+def main():
+    root = tk.Tk()
+    app = FileComparerGUI(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) < 3:
-        print("Usage: python compare_files.py <small_file> <large_file> [output_prefix]")
-        print("\nExample:")
-        print("  python compare_files.py small_list.txt large_list.txt results")
-        sys.exit(1)
-    
-    small_file = sys.argv[1]
-    large_file = sys.argv[2]
-    output_prefix = sys.argv[3] if len(sys.argv) > 3 else "results"
-    
-    compare_files(small_file, large_file, output_prefix)
+    main()
