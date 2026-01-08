@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""
+Compare two text files and find:
+1. Rows from small file that exist in large file
+2. Rows from small file that are unique (not in large file)
+"""
+
+def compare_files(small_file_path, large_file_path, output_prefix="results"):
+    """
+    Compare two files and identify matching and unique entries.
+    
+    Args:
+        small_file_path: Path to the smaller file (~40 rows)
+        large_file_path: Path to the larger file (~1.7M rows)
+        output_prefix: Prefix for output files
+    """
+    print(f"Reading smaller file: {small_file_path}")
+    with open(small_file_path, 'r', encoding='utf-8') as f:
+        small_entries = set(line.strip() for line in f if line.strip())
+    
+    print(f"Found {len(small_entries)} unique entries in small file")
+    
+    print(f"\nReading and comparing with large file: {large_file_path}")
+    matches = set()
+    large_row_count = 0
+    
+    # Read large file line by line to avoid memory issues
+    with open(large_file_path, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f, 1):
+            large_row_count = i
+            stripped = line.strip()
+            if stripped in small_entries:
+                matches.add(stripped)
+            
+            # Progress indicator every 100k lines
+            if i % 100000 == 0:
+                print(f"  Processed {i:,} rows... Found {len(matches)} matches so far")
+    
+    print(f"\nProcessed {large_row_count:,} rows from large file")
+    
+    # Calculate unique entries (in small file but not in large file)
+    unique_entries = small_entries - matches
+    
+    # Write results
+    matches_file = f"{output_prefix}_matches.txt"
+    unique_file = f"{output_prefix}_unique.txt"
+    
+    with open(matches_file, 'w', encoding='utf-8') as f:
+        for entry in sorted(matches):
+            f.write(entry + '\n')
+    
+    with open(unique_file, 'w', encoding='utf-8') as f:
+        for entry in sorted(unique_entries):
+            f.write(entry + '\n')
+    
+    # Print summary
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    print(f"Total entries in small file: {len(small_entries)}")
+    print(f"Entries found in large file: {len(matches)}")
+    print(f"Unique entries (not in large file): {len(unique_entries)}")
+    print(f"\nResults written to:")
+    print(f"  - {matches_file}")
+    print(f"  - {unique_file}")
+    print("="*60)
+    
+    return matches, unique_entries
+
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) < 3:
+        print("Usage: python compare_files.py <small_file> <large_file> [output_prefix]")
+        print("\nExample:")
+        print("  python compare_files.py small_list.txt large_list.txt results")
+        sys.exit(1)
+    
+    small_file = sys.argv[1]
+    large_file = sys.argv[2]
+    output_prefix = sys.argv[3] if len(sys.argv) > 3 else "results"
+    
+    compare_files(small_file, large_file, output_prefix)
