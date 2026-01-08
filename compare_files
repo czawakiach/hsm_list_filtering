@@ -119,55 +119,127 @@ class FileComparerGUI:
         thread = threading.Thread(target=self.compare_files)
         thread.start()
     
+    def extract_after_russia_small(self, line):
+        """Extract everything from 'RUSSIA/' onwards (case-insensitive)"""
+        line_upper = line.upper()
+        idx = line_upper.find('RUSSIA/')
+        if idx != -1:
+            return line[idx:].strip().upper()  # Return in uppercase for case-insensitive comparison
+        return None
+    
+    def extract_after_russia_large(self, line):
+        """Extract everything from 'RUSSIA' onwards (case-insensitive)"""
+        line_upper = line.upper()
+        idx = line_upper.find('RUSSIA')
+        if idx != -1:
+            return line[idx:].strip().upper()  # Return in uppercase for case-insensitive comparison
+        return None
+    
     def compare_files(self):
         try:
             self.log(f"Reading small file: {os.path.basename(self.small_file_path)}")
+            self.log("Extracting patterns after 'RUSSIA/' ...\n")
+            
+            small_entries = {}  # Map extracted pattern -> original line
+            small_patterns = set()
+            skipped_small = 0
             
             with open(self.small_file_path, 'r', encoding='utf-8') as f:
-                small_entries = set(line.strip() for line in f if line.strip())
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    pattern = self.extract_after_russia_small(line)
+                    if pattern:
+                        small_patterns.add(pattern)
+                        if pattern not in small_entries:
+                            small_entries[pattern] = line  # Store original line for reference
+                    else:
+                        skipped_small += 1
             
-            self.log(f"Found {len(small_entries)} unique entries in small file\n")
+            self.log(f"Found {len(small_patterns)} unique patterns with 'RUSSIA/' in small file")
+            if skipped_small > 0:
+                self.log(f"Skipped {skipped_small} lines without 'RUSSIA/' pattern\n")
+            else:
+                self.log("")
             
             self.log(f"Reading and comparing with large file: {os.path.basename(self.large_file_path)}")
-            matches = set()
+            self.log("Extracting patterns after 'RUSSIA' ...\n")
+            
+            matches = {}  # Map pattern -> (small_line, large_line)
             large_row_count = 0
+            skipped_large = 0
             
             with open(self.large_file_path, 'r', encoding='utf-8') as f:
                 for i, line in enumerate(f, 1):
                     large_row_count = i
-                    stripped = line.strip()
-                    if stripped in small_entries:
-                        matches.add(stripped)
+                    line = line.strip()
+                    
+                    if not line:
+                        continue
+                    
+                    pattern = self.extract_after_russia_large(line)
+                    if pattern:
+                        if pattern in small_patterns:
+                            if pattern not in matches:
+                                matches[pattern] = (small_entries[pattern], line)
+                    else:
+                        skipped_large += 1
                     
                     if i % 100000 == 0:
                         self.log(f"  Processed {i:,} rows... Found {len(matches)} matches so far")
             
             self.log(f"\nProcessed {large_row_count:,} rows from large file")
+            if skipped_large > 0:
+                self.log(f"Skipped {skipped_large:,} lines without 'RUSSIA' pattern")
             
-            unique_entries = small_entries - matches
+            unique_patterns = small_patterns - set(matches.keys())
+            unique_entries = {pattern: small_entries[pattern] for pattern in unique_patterns}
             
             # Write results
             base_name = os.path.splitext(os.path.basename(self.small_file_path))[0]
             matches_file = os.path.join(self.output_dir, f"{base_name}_matches.txt")
             unique_file = os.path.join(self.output_dir, f"{base_name}_unique.txt")
+            matches_detail_file = os.path.join(self.output_dir, f"{base_name}_matches_detail.txt")
             
+            # Write matched patterns
             with open(matches_file, 'w', encoding='utf-8') as f:
-                for entry in sorted(matches):
-                    f.write(entry + '\n')
+                f.write("# Matched patterns (case-insensitive comparison)\n")
+                f.write("# Pattern | Small file line | Large file line\n\n")
+                for pattern in sorted(matches.keys()):
+                    small_line, large_line = matches[pattern]
+                    f.write(f"{pattern}\n")
             
+            # Write matched patterns with details
+            with open(matches_detail_file, 'w', encoding='utf-8') as f:
+                f.write("# Detailed matches showing original lines from both files\n")
+                f.write("# Format: Pattern | Small file | Large file\n\n")
+                for pattern in sorted(matches.keys()):
+                    small_line, large_line = matches[pattern]
+                    f.write(f"Pattern: {pattern}\n")
+                    f.write(f"  Small: {small_line}\n")
+                    f.write(f"  Large: {large_line}\n\n")
+            
+            # Write unique patterns (not found in large file)
             with open(unique_file, 'w', encoding='utf-8') as f:
-                for entry in sorted(unique_entries):
-                    f.write(entry + '\n')
+                f.write("# Patterns from small file NOT found in large file\n")
+                f.write("# Pattern | Original line\n\n")
+                for pattern in sorted(unique_entries.keys()):
+                    original_line = unique_entries[pattern]
+                    f.write(f"{pattern}\n")
+                    f.write(f"  Original: {original_line}\n\n")
             
             # Print summary
             self.log("\n" + "="*60)
             self.log("SUMMARY")
             self.log("="*60)
-            self.log(f"Total entries in small file: {len(small_entries)}")
-            self.log(f"Entries found in large file: {len(matches)}")
-            self.log(f"Unique entries (not in large file): {len(unique_entries)}")
+            self.log(f"Total patterns in small file: {len(small_patterns)}")
+            self.log(f"Patterns found in large file: {len(matches)}")
+            self.log(f"Unique patterns (not in large file): {len(unique_entries)}")
             self.log(f"\nResults written to:")
             self.log(f"  - {matches_file}")
+            self.log(f"  - {matches_detail_file}")
             self.log(f"  - {unique_file}")
             self.log("="*60)
             
