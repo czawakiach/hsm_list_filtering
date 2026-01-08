@@ -119,127 +119,106 @@ class FileComparerGUI:
         thread = threading.Thread(target=self.compare_files)
         thread.start()
     
-    def extract_after_russia_small(self, line):
-        """Extract everything from 'RUSSIA/' onwards (case-insensitive)"""
-        line_upper = line.upper()
-        idx = line_upper.find('RUSSIA/')
-        if idx != -1:
-            return line[idx:].strip().upper()  # Return in uppercase for case-insensitive comparison
-        return None
-    
-    def extract_after_russia_large(self, line):
-        """Extract everything from 'RUSSIA' onwards (case-insensitive)"""
-        line_upper = line.upper()
-        idx = line_upper.find('RUSSIA')
-        if idx != -1:
-            return line[idx:].strip().upper()  # Return in uppercase for case-insensitive comparison
-        return None
+    def normalize_string(self, s):
+        """Normalize string: uppercase and remove all whitespace for comparison"""
+        return ''.join(s.upper().split())
     
     def compare_files(self):
         try:
             self.log(f"Reading small file: {os.path.basename(self.small_file_path)}")
-            self.log("Extracting patterns after 'RUSSIA/' ...\n")
             
-            small_entries = {}  # Map extracted pattern -> original line
-            small_patterns = set()
-            skipped_small = 0
-            
+            small_lines = []
             with open(self.small_file_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
-                    if not line:
-                        continue
-                    
-                    pattern = self.extract_after_russia_small(line)
-                    if pattern:
-                        small_patterns.add(pattern)
-                        if pattern not in small_entries:
-                            small_entries[pattern] = line  # Store original line for reference
-                    else:
-                        skipped_small += 1
+                    if line:
+                        small_lines.append(line)
             
-            self.log(f"Found {len(small_patterns)} unique patterns with 'RUSSIA/' in small file")
-            if skipped_small > 0:
-                self.log(f"Skipped {skipped_small} lines without 'RUSSIA/' pattern\n")
-            else:
-                self.log("")
+            self.log(f"Found {len(small_lines)} entries in small file\n")
             
-            self.log(f"Reading and comparing with large file: {os.path.basename(self.large_file_path)}")
-            self.log("Extracting patterns after 'RUSSIA' ...\n")
+            self.log(f"Reading large file and searching for matches: {os.path.basename(self.large_file_path)}")
             
-            matches = {}  # Map pattern -> (small_line, large_line)
+            # Build normalized lookup for small lines
+            small_normalized = {self.normalize_string(line): line for line in small_lines}
+            
+            # Track matches: small_line -> list of (large_line, line_number)
+            matches = {line: [] for line in small_lines}
             large_row_count = 0
-            skipped_large = 0
             
             with open(self.large_file_path, 'r', encoding='utf-8') as f:
-                for i, line in enumerate(f, 1):
+                for i, large_line in enumerate(f, 1):
                     large_row_count = i
-                    line = line.strip()
+                    large_line = large_line.strip()
                     
-                    if not line:
+                    if not large_line:
                         continue
                     
-                    pattern = self.extract_after_russia_large(line)
-                    if pattern:
-                        if pattern in small_patterns:
-                            if pattern not in matches:
-                                matches[pattern] = (small_entries[pattern], line)
-                    else:
-                        skipped_large += 1
+                    large_normalized = self.normalize_string(large_line)
+                    
+                    # Check if any small line is a substring of this large line
+                    for small_norm, small_orig in small_normalized.items():
+                        if small_norm in large_normalized:
+                            matches[small_orig].append((large_line, i))
                     
                     if i % 100000 == 0:
-                        self.log(f"  Processed {i:,} rows... Found {len(matches)} matches so far")
+                        matched_count = sum(1 for v in matches.values() if len(v) > 0)
+                        self.log(f"  Processed {i:,} rows... Found matches for {matched_count} entries so far")
             
             self.log(f"\nProcessed {large_row_count:,} rows from large file")
-            if skipped_large > 0:
-                self.log(f"Skipped {skipped_large:,} lines without 'RUSSIA' pattern")
             
-            unique_patterns = small_patterns - set(matches.keys())
-            unique_entries = {pattern: small_entries[pattern] for pattern in unique_patterns}
+            # Separate matched and unique entries
+            matched_entries = {k: v for k, v in matches.items() if len(v) > 0}
+            unique_entries = [k for k, v in matches.items() if len(v) == 0]
             
             # Write results
             base_name = os.path.splitext(os.path.basename(self.small_file_path))[0]
             matches_file = os.path.join(self.output_dir, f"{base_name}_matches.txt")
             unique_file = os.path.join(self.output_dir, f"{base_name}_unique.txt")
-            matches_detail_file = os.path.join(self.output_dir, f"{base_name}_matches_detail.txt")
             
-            # Write matched patterns
+            # Write matched entries with details
             with open(matches_file, 'w', encoding='utf-8') as f:
-                f.write("# Matched patterns (case-insensitive comparison)\n")
-                f.write("# Pattern | Small file line | Large file line\n\n")
-                for pattern in sorted(matches.keys()):
-                    small_line, large_line = matches[pattern]
-                    f.write(f"{pattern}\n")
+                f.write("# Matched entries (case-insensitive, whitespace-ignored substring matching)\n")
+                f.write("# Shows: Small file entry | Number of matches | First match from large file\n\n")
+                
+                for small_line in sorted(matched_entries.keys()):
+                    match_list = matched_entries[small_line]
+                    num_matches = len(match_list)
+                    first_match_line, first_match_num = match_list[0]
+                    
+                    f.write(f"Small file entry:\n  {small_line}\n")
+                    f.write(f"Number of matches: {num_matches}\n")
+                    f.write(f"First match (line {first_match_num}):\n  {first_match_line}\n")
+                    
+                    if num_matches > 1:
+                        f.write(f"Additional matches found at lines: ")
+                        f.write(", ".join(str(line_num) for _, line_num in match_list[1:]))
+                        f.write("\n")
+                    
+                    f.write("\n" + "-"*80 + "\n\n")
             
-            # Write matched patterns with details
-            with open(matches_detail_file, 'w', encoding='utf-8') as f:
-                f.write("# Detailed matches showing original lines from both files\n")
-                f.write("# Format: Pattern | Small file | Large file\n\n")
-                for pattern in sorted(matches.keys()):
-                    small_line, large_line = matches[pattern]
-                    f.write(f"Pattern: {pattern}\n")
-                    f.write(f"  Small: {small_line}\n")
-                    f.write(f"  Large: {large_line}\n\n")
-            
-            # Write unique patterns (not found in large file)
+            # Write unique entries (not found in large file)
             with open(unique_file, 'w', encoding='utf-8') as f:
-                f.write("# Patterns from small file NOT found in large file\n")
-                f.write("# Pattern | Original line\n\n")
-                for pattern in sorted(unique_entries.keys()):
-                    original_line = unique_entries[pattern]
-                    f.write(f"{pattern}\n")
-                    f.write(f"  Original: {original_line}\n\n")
+                f.write("# Entries from small file NOT found in large file\n")
+                f.write("# (case-insensitive, whitespace-ignored substring search)\n\n")
+                
+                for line in unique_entries:
+                    f.write(f"{line}\n")
             
             # Print summary
             self.log("\n" + "="*60)
             self.log("SUMMARY")
             self.log("="*60)
-            self.log(f"Total patterns in small file: {len(small_patterns)}")
-            self.log(f"Patterns found in large file: {len(matches)}")
-            self.log(f"Unique patterns (not in large file): {len(unique_entries)}")
+            self.log(f"Total entries in small file: {len(small_lines)}")
+            self.log(f"Entries found in large file: {len(matched_entries)}")
+            self.log(f"Unique entries (not in large file): {len(unique_entries)}")
+            
+            # Show multiple match statistics
+            multi_match_count = sum(1 for v in matched_entries.values() if len(v) > 1)
+            if multi_match_count > 0:
+                self.log(f"Entries with multiple matches: {multi_match_count}")
+            
             self.log(f"\nResults written to:")
             self.log(f"  - {matches_file}")
-            self.log(f"  - {matches_detail_file}")
             self.log(f"  - {unique_file}")
             self.log("="*60)
             
