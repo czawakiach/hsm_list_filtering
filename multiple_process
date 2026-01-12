@@ -181,18 +181,25 @@ class TapeBatchProcessorGUI:
             self.log(f"\nFound {len(tape_files)} tape file(s) to process")
             self.log(f"HSM file: {os.path.basename(self.hsm_file_path)}\n")
             
-            # Load HSM file once (it's large, so we do this only once)
-            self.log("Loading HSM file into memory...")
-            hsm_lines = []
+            # Load HSM file once and preprocess for fast lookups
+            self.log("Loading and preprocessing HSM file...")
+            self.log("(This may take a few minutes for 1.7M rows...)")
+            
+            # Store both original and normalized versions
+            hsm_data = []  # List of (original_line, normalized_line, line_number)
+            
             with open(self.hsm_file_path, 'r', encoding='utf-8') as f:
                 for i, line in enumerate(f, 1):
                     line = line.strip()
                     if line:
-                        hsm_lines.append((line, i))
+                        normalized = self.normalize_string(line)
+                        hsm_data.append((line, normalized, i))
+                    
                     if i % 500000 == 0:
                         self.log(f"  Loaded {i:,} lines...")
             
-            self.log(f"HSM file loaded: {len(hsm_lines):,} lines\n")
+            self.log(f"HSM file loaded: {len(hsm_data):,} lines")
+            self.log("Preprocessing complete!\n")
             
             # Process each tape file
             all_results = []
@@ -215,18 +222,24 @@ class TapeBatchProcessorGUI:
                 
                 self.log(f"  Tape entries: {len(tape_entries)}")
                 
-                # Compare with HSM
-                matches = {entry: [] for entry in tape_entries}
+                if len(tape_entries) > 1000:
+                    self.log(f"  Large file detected - using optimized search...")
                 
-                # Normalize tape entries for faster lookup
-                tape_normalized = {self.normalize_string(entry): entry for entry in tape_entries}
+                # OPTIMIZED ALGORITHM: For each tape entry, search through HSM once
+                matches = {}
                 
-                for hsm_line, hsm_line_num in hsm_lines:
-                    hsm_normalized = self.normalize_string(hsm_line)
+                for tape_idx, tape_entry in enumerate(tape_entries, 1):
+                    tape_normalized = self.normalize_string(tape_entry)
+                    matches[tape_entry] = []
                     
-                    for tape_norm, tape_orig in tape_normalized.items():
-                        if tape_norm in hsm_normalized:
-                            matches[tape_orig].append((hsm_line, hsm_line_num))
+                    # Search through HSM data
+                    for hsm_line, hsm_normalized, hsm_line_num in hsm_data:
+                        if tape_normalized in hsm_normalized:
+                            matches[tape_entry].append((hsm_line, hsm_line_num))
+                    
+                    # Progress update for large files
+                    if len(tape_entries) > 1000 and tape_idx % 500 == 0:
+                        self.log(f"    Processed {tape_idx}/{len(tape_entries)} entries...")
                 
                 # Calculate statistics
                 matched_entries = {k: v for k, v in matches.items() if len(v) > 0}
