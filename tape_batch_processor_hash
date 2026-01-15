@@ -1,0 +1,556 @@
+#!/usr/bin/env python3
+"""
+Hash-indexed batch processor for tape file comparison with HSM data.
+Uses hash-based indexing for 10-20x faster searching.
+Outputs results to Excel with summary and detailed sheets per tape.
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+import re
+from collections import defaultdict
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    print("Installing openpyxl for Excel support...")
+    import subprocess
+    subprocess.check_call(['pip', 'install', 'openpyxl', '--break-system-packages'])
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+
+class TapeBatchProcessorHashGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Tape Batch Processor - HSM Comparison (HASH INDEXED)")
+        self.root.geometry("800x700")
+        
+        self.folder_path = None
+        self.hsm_file_path = None
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Tape Batch Processor - HASH INDEXED VERSION", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        subtitle_label = ttk.Label(main_frame, text="⚡ Optimized with hash-based indexing for maximum speed", 
+                                   font=('Arial', 10, 'italic'), foreground='blue')
+        subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+        
+        # Folder selection
+        ttk.Label(main_frame, text="Tape files folder:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.folder_label = ttk.Label(main_frame, text="No folder selected", 
+                                      foreground="gray", wraplength=500)
+        self.folder_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_folder).grid(row=2, column=2, padx=5)
+        
+        # HSM file selection
+        ttk.Label(main_frame, text="HSM list file (1.7M rows):").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.hsm_file_label = ttk.Label(main_frame, text="No file selected", 
+                                        foreground="gray", wraplength=500)
+        self.hsm_file_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_hsm_file).grid(row=3, column=2, padx=5)
+        
+        # File detection info
+        self.detection_frame = ttk.LabelFrame(main_frame, text="Detected Tape Files", padding="10")
+        self.detection_frame.grid(row=4, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        
+        self.detection_text = tk.Text(self.detection_frame, height=8, width=90, wrap=tk.WORD)
+        self.detection_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        scrollbar = ttk.Scrollbar(self.detection_frame, orient="vertical", command=self.detection_text.yview)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.detection_text.configure(yscrollcommand=scrollbar.set)
+        
+        # Process button
+        self.process_button = ttk.Button(main_frame, text="Process All Tapes", 
+                                        command=self.start_processing, state=tk.DISABLED)
+        self.process_button.grid(row=5, column=0, columnspan=3, pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=500)
+        self.progress.grid(row=6, column=0, columnspan=3, pady=5)
+        
+        # Status/Results text area
+        ttk.Label(main_frame, text="Processing Status:").grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=90, wrap=tk.WORD)
+        self.status_text.grid(row=8, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(8, weight=1)
+    
+    def select_folder(self):
+        folder = filedialog.askdirectory(title="Select folder containing tape files")
+        if folder:
+            self.folder_path = folder
+            self.folder_label.config(text=folder, foreground="black")
+            self.detect_tape_files()
+            self.check_ready()
+    
+    def select_hsm_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select HSM list file",
+            filetypes=[("Text files", "*.txt *.lst"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.hsm_file_path = filepath
+            self.hsm_file_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def detect_tape_files(self):
+        """Detect all tape files matching pattern *_files in the folder"""
+        self.detection_text.delete(1.0, tk.END)
+        
+        if not self.folder_path:
+            return
+        
+        tape_files = []
+        for filename in os.listdir(self.folder_path):
+            if '_files' in filename.lower():
+                tape_files.append(filename)
+        
+        if tape_files:
+            self.detection_text.insert(tk.END, f"Found {len(tape_files)} tape file(s):\n\n")
+            for f in sorted(tape_files):
+                # Parse tape info
+                tape_num, country = self.parse_filename(f)
+                country_str = f" ({country})" if country else ""
+                self.detection_text.insert(tk.END, f"  • {f}  →  Tape: {tape_num}{country_str}\n")
+        else:
+            self.detection_text.insert(tk.END, "No files matching pattern '*_files' found in folder.\n")
+            self.detection_text.insert(tk.END, "Please check folder location.")
+    
+    def parse_filename(self, filename):
+        """Extract tape number and country code from filename"""
+        # Pattern: UD7904_EGY_files or UD7904_files
+        match = re.match(r'(UD\d+)(?:_([A-Z]{3}))?_files', filename, re.IGNORECASE)
+        if match:
+            tape_num = match.group(1).upper()
+            country = match.group(2).upper() if match.group(2) else None
+            return tape_num, country
+        return filename, None
+    
+    def check_ready(self):
+        if self.folder_path and self.hsm_file_path:
+            self.process_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_processing(self):
+        self.process_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        
+        # Run processing in separate thread
+        thread = threading.Thread(target=self.process_all_tapes)
+        thread.start()
+    
+    def normalize_string(self, s):
+        """Normalize string: uppercase and remove all whitespace"""
+        return ''.join(s.upper().split())
+    
+    def extract_path_from_hsm_line(self, line):
+        """
+        Extract file path from HSM line (everything after the date).
+        Format: -rwxrwxr-x. 1 54958 g_agidat 14605887 Jul 12  2017 ./au/NZ-NEW_ZEALAND/...
+        Returns the path portion: ./au/NZ-NEW_ZEALAND/...
+        """
+        # Split by whitespace and look for date pattern (month day year)
+        # Then take everything after that
+        parts = line.split()
+        
+        # Try to find year (4 digits) which indicates end of date
+        for i, part in enumerate(parts):
+            if part.isdigit() and len(part) == 4 and 1900 <= int(part) <= 2100:
+                # Everything after the year is the path
+                if i + 1 < len(parts):
+                    path = ' '.join(parts[i + 1:])
+                    return path
+        
+        # If no date pattern found, return original line
+        return line
+    
+    def build_hash_index(self, hsm_data, ngram_size=10):
+        """
+        Build hash index for fast substring lookups.
+        
+        For each HSM line, extract all n-grams from the path and store in a dictionary:
+        n-gram -> list of (original_line, path, normalized_path, line_number) tuples
+        
+        Args:
+            hsm_data: list of (original_line, path, normalized_path, line_number)
+            ngram_size: size of n-grams to extract (default 10 chars)
+        
+        Returns:
+            Dictionary mapping n-grams to lists of HSM entries
+        """
+        self.log(f"\nBuilding hash index (n-gram size: {ngram_size})...")
+        self.log("This will take a few minutes but makes searching 10-20x faster...")
+        
+        hash_index = defaultdict(list)
+        
+        for idx, (orig_line, path, norm_path, line_num) in enumerate(hsm_data, 1):
+            # Extract all n-grams from normalized path
+            if len(norm_path) >= ngram_size:
+                for i in range(len(norm_path) - ngram_size + 1):
+                    ngram = norm_path[i:i + ngram_size]
+                    hash_index[ngram].append((orig_line, path, norm_path, line_num))
+            else:
+                # For short paths, use the whole path as key
+                hash_index[norm_path].append((orig_line, path, norm_path, line_num))
+            
+            if idx % 250000 == 0:
+                self.log(f"  Indexed {idx:,} lines... ({len(hash_index):,} unique n-grams)")
+        
+        self.log(f"\n✓ Hash index complete!")
+        self.log(f"  Total n-grams: {len(hash_index):,}")
+        self.log(f"  Average entries per n-gram: {sum(len(v) for v in hash_index.values()) / len(hash_index):.1f}")
+        
+        return hash_index
+    
+    def search_with_hash_index(self, tape_entry_normalized, hash_index, ngram_size=10):
+        """
+        Search for tape entry in HSM using hash index.
+        
+        Strategy:
+        1. Extract first n-gram from tape entry
+        2. Look up candidate HSM lines in hash index (O(1))
+        3. Check only those candidates for full substring match
+        
+        Returns:
+            (hsm_line, line_number) if match found, None otherwise
+        """
+        if len(tape_entry_normalized) < ngram_size:
+            # For short entries, look up directly
+            candidates = hash_index.get(tape_entry_normalized, [])
+        else:
+            # Extract first n-gram and get candidates
+            first_ngram = tape_entry_normalized[:ngram_size]
+            candidates = hash_index.get(first_ngram, [])
+        
+        # Check candidates for full substring match
+        for orig_line, path, norm_path, line_num in candidates:
+            if tape_entry_normalized in norm_path:
+                return (orig_line, line_num)
+        
+        return None
+    
+    def process_all_tapes(self):
+        try:
+            self.log("="*70)
+            self.log("STARTING BATCH PROCESSING - HASH INDEXED VERSION")
+            self.log("="*70)
+            
+            # Find all tape files
+            tape_files = []
+            for filename in os.listdir(self.folder_path):
+                if '_files' in filename.lower():
+                    tape_files.append(filename)
+            
+            if not tape_files:
+                self.log("ERROR: No tape files found!")
+                messagebox.showerror("Error", "No files matching pattern '*_files' found.")
+                return
+            
+            self.log(f"\nFound {len(tape_files)} tape file(s) to process")
+            self.log(f"HSM file: {os.path.basename(self.hsm_file_path)}\n")
+            
+            # Load HSM file and preprocess
+            self.log("="*70)
+            self.log("PHASE 1: Loading and preprocessing HSM file")
+            self.log("="*70)
+            
+            hsm_data = []  # List of (original_line, path, normalized_path, line_number)
+            
+            self.log("Extracting file paths and normalizing...")
+            
+            with open(self.hsm_file_path, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    line = line.strip()
+                    if line:
+                        # Extract path portion (after date)
+                        path = self.extract_path_from_hsm_line(line)
+                        # Normalize the path for comparison
+                        normalized = self.normalize_string(path)
+                        hsm_data.append((line, path, normalized, i))
+                    
+                    if i % 500000 == 0:
+                        self.log(f"  Loaded {i:,} lines...")
+            
+            self.log(f"\n✓ HSM file loaded: {len(hsm_data):,} lines")
+            
+            # Build hash index
+            self.log("\n" + "="*70)
+            self.log("PHASE 2: Building hash index")
+            self.log("="*70)
+            
+            hash_index = self.build_hash_index(hsm_data, ngram_size=10)
+            
+            # Process each tape file
+            self.log("\n" + "="*70)
+            self.log("PHASE 3: Processing tape files")
+            self.log("="*70)
+            
+            all_results = []
+            
+            for idx, tape_filename in enumerate(sorted(tape_files), 1):
+                self.log(f"\n{'='*70}")
+                self.log(f"Processing {idx}/{len(tape_files)}: {tape_filename}")
+                self.log(f"{'='*70}")
+                
+                tape_path = os.path.join(self.folder_path, tape_filename)
+                tape_num, country = self.parse_filename(tape_filename)
+                
+                # Read tape file (small file) and filter by length
+                tape_entries = []
+                skipped_short = 0
+                
+                with open(tape_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            # Filter: only entries with 25+ characters (before normalization)
+                            if len(line) >= 25:
+                                tape_entries.append(line)
+                            else:
+                                skipped_short += 1
+                
+                self.log(f"  Tape entries: {len(tape_entries)}")
+                if skipped_short > 0:
+                    self.log(f"  Skipped {skipped_short} short entries (< 25 chars)")
+                
+                if len(tape_entries) > 1000:
+                    self.log(f"  Large file detected - using hash-indexed search...")
+                
+                # HASH-INDEXED SEARCH: Fast O(1) lookups
+                matches = {}
+                
+                for tape_idx, tape_entry in enumerate(tape_entries, 1):
+                    tape_normalized = self.normalize_string(tape_entry)
+                    
+                    # Use hash index for fast lookup
+                    match_result = self.search_with_hash_index(tape_normalized, hash_index, ngram_size=10)
+                    
+                    if match_result:
+                        matches[tape_entry] = [match_result]  # Keep as list for compatibility
+                    else:
+                        matches[tape_entry] = []
+                    
+                    # Progress update for large files
+                    if len(tape_entries) > 1000 and tape_idx % 1000 == 0:
+                        matched_so_far = sum(1 for v in list(matches.values())[:tape_idx] if len(v) > 0)
+                        self.log(f"    Processed {tape_idx}/{len(tape_entries)} entries... ({matched_so_far} matches found)")
+                
+                # Calculate statistics
+                matched_entries = {k: v for k, v in matches.items() if len(v) > 0}
+                unique_entries = [k for k, v in matches.items() if len(v) == 0]
+                
+                match_rate = (len(matched_entries) / len(tape_entries) * 100) if tape_entries else 0
+                
+                self.log(f"  Matches found: {len(matched_entries)}")
+                self.log(f"  Unique (not found): {len(unique_entries)}")
+                self.log(f"  Match rate: {match_rate:.1f}%")
+                
+                # Store results
+                result = {
+                    'tape_num': tape_num,
+                    'country': country,
+                    'filename': tape_filename,
+                    'total_entries': len(tape_entries),
+                    'matched': len(matched_entries),
+                    'unique': len(unique_entries),
+                    'match_rate': match_rate,
+                    'matched_entries': matched_entries,
+                    'unique_entries': unique_entries
+                }
+                all_results.append(result)
+                
+                # Save to Excel immediately after each tape
+                output_file = os.path.join(self.folder_path, "HSM_Comparison_Results_HASH.xlsx")
+                self.save_results_to_excel(all_results, output_file)
+                self.log(f"  ✓ Results saved to Excel\n")
+            
+            # Final message
+            output_file = os.path.join(self.folder_path, "HSM_Comparison_Results_HASH.xlsx")
+            self.log(f"\n{'='*70}")
+            self.log("PROCESSING COMPLETE!")
+            self.log(f"{'='*70}")
+            self.log(f"\nFinal results saved to: {output_file}")
+            
+            messagebox.showinfo("Success", f"Processing complete!\n\nResults saved to:\n{output_file}")
+            
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        
+        finally:
+            self.progress.stop()
+            self.process_button.config(state=tk.NORMAL)
+    
+    def save_results_to_excel(self, results, output_file):
+        """Create/update Excel file with current results (incremental save)"""
+        
+        # Check if file exists, if so load it, otherwise create new
+        if os.path.exists(output_file):
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(output_file)
+            except:
+                wb = Workbook()
+                if 'Sheet' in wb.sheetnames:
+                    wb.remove(wb['Sheet'])
+        else:
+            wb = Workbook()
+            if 'Sheet' in wb.sheetnames:
+                wb.remove(wb['Sheet'])
+        
+        # Recreate summary sheet (always up-to-date, always first)
+        if "SUMMARY" in wb.sheetnames:
+            wb.remove(wb["SUMMARY"])
+        
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
+        
+        # Header styling
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        # Summary headers
+        headers = ["Tape", "Country", "Total Entries", "Matches", "Unique", "Match %"]
+        for col, header in enumerate(headers, 1):
+            cell = summary_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Summary data
+        row = 2
+        for result in results:
+            summary_sheet.cell(row=row, column=1, value=result['tape_num'])
+            summary_sheet.cell(row=row, column=2, value=result['country'] or "N/A")
+            summary_sheet.cell(row=row, column=3, value=result['total_entries'])
+            summary_sheet.cell(row=row, column=4, value=result['matched'])
+            summary_sheet.cell(row=row, column=5, value=result['unique'])
+            summary_sheet.cell(row=row, column=6, value=f"{result['match_rate']:.1f}%")
+            row += 1
+        
+        # Add totals row
+        summary_sheet.cell(row=row, column=1, value="TOTAL")
+        summary_sheet.cell(row=row, column=1).font = Font(bold=True)
+        total_entries = sum(r['total_entries'] for r in results)
+        total_matched = sum(r['matched'] for r in results)
+        total_unique = sum(r['unique'] for r in results)
+        overall_match_rate = (total_matched / total_entries * 100) if total_entries > 0 else 0
+        
+        summary_sheet.cell(row=row, column=3, value=total_entries)
+        summary_sheet.cell(row=row, column=4, value=total_matched)
+        summary_sheet.cell(row=row, column=5, value=total_unique)
+        summary_sheet.cell(row=row, column=6, value=f"{overall_match_rate:.1f}%")
+        
+        for col in range(1, 7):
+            summary_sheet.cell(row=row, column=col).font = Font(bold=True)
+        
+        # Adjust column widths
+        summary_sheet.column_dimensions['A'].width = 12
+        summary_sheet.column_dimensions['B'].width = 10
+        summary_sheet.column_dimensions['C'].width = 15
+        summary_sheet.column_dimensions['D'].width = 12
+        summary_sheet.column_dimensions['E'].width = 12
+        summary_sheet.column_dimensions['F'].width = 12
+        
+        # Create/update detailed sheets for each tape
+        for result in results:
+            sheet_name = f"{result['tape_num']}"
+            if result['country']:
+                sheet_name += f"_{result['country']}"
+            
+            # Excel sheet names have max 31 characters
+            if len(sheet_name) > 31:
+                sheet_name = sheet_name[:31]
+            
+            # Skip if sheet already exists (already processed)
+            if sheet_name in wb.sheetnames:
+                continue
+            
+            detail_sheet = wb.create_sheet(sheet_name)
+            
+            # Metadata
+            detail_sheet.cell(row=1, column=1, value="Tape:").font = Font(bold=True)
+            detail_sheet.cell(row=1, column=2, value=result['tape_num'])
+            detail_sheet.cell(row=2, column=1, value="Country:").font = Font(bold=True)
+            detail_sheet.cell(row=2, column=2, value=result['country'] or "N/A")
+            detail_sheet.cell(row=3, column=1, value="File:").font = Font(bold=True)
+            detail_sheet.cell(row=3, column=2, value=result['filename'])
+            detail_sheet.cell(row=4, column=1, value="Total Entries:").font = Font(bold=True)
+            detail_sheet.cell(row=4, column=2, value=result['total_entries'])
+            detail_sheet.cell(row=5, column=1, value="Matched:").font = Font(bold=True)
+            detail_sheet.cell(row=5, column=2, value=result['matched'])
+            detail_sheet.cell(row=6, column=1, value="Unique:").font = Font(bold=True)
+            detail_sheet.cell(row=6, column=2, value=result['unique'])
+            
+            # Matches section
+            detail_sheet.cell(row=8, column=1, value="MATCHED ENTRIES").font = Font(bold=True, size=12)
+            
+            match_headers = ["Tape Entry", "Matched HSM Line", "HSM Line #"]
+            for col, header in enumerate(match_headers, 1):
+                cell = detail_sheet.cell(row=9, column=col, value=header)
+                cell.fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+                cell.font = Font(bold=True, color="FFFFFF")
+            
+            row = 10
+            for tape_entry, match_list in sorted(result['matched_entries'].items()):
+                detail_sheet.cell(row=row, column=1, value=tape_entry)
+                if match_list:
+                    match_line, match_line_num = match_list[0]
+                    detail_sheet.cell(row=row, column=2, value=match_line)
+                    detail_sheet.cell(row=row, column=3, value=match_line_num)
+                row += 1
+            
+            # Unique entries section
+            unique_start_row = row + 2
+            detail_sheet.cell(row=unique_start_row, column=1, value="UNIQUE ENTRIES (NOT FOUND IN HSM)").font = Font(bold=True, size=12)
+            
+            unique_header = detail_sheet.cell(row=unique_start_row + 1, column=1, value="Tape Entry")
+            unique_header.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+            unique_header.font = Font(bold=True, color="FFFFFF")
+            
+            row = unique_start_row + 2
+            for unique_entry in sorted(result['unique_entries']):
+                detail_sheet.cell(row=row, column=1, value=unique_entry)
+                row += 1
+            
+            # Adjust column widths
+            detail_sheet.column_dimensions['A'].width = 60
+            detail_sheet.column_dimensions['B'].width = 60
+            detail_sheet.column_dimensions['C'].width = 12
+        
+        # Save workbook
+        wb.save(output_file)
+
+
+def main():
+    root = tk.Tk()
+    app = TapeBatchProcessorHashGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
