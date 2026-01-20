@@ -63,9 +63,17 @@ class TapeBatchProcessorHashGUI:
         self.hsm_file_label.grid(row=3, column=1, sticky=tk.W, padx=5)
         ttk.Button(main_frame, text="Browse...", command=self.select_hsm_file).grid(row=3, column=2, padx=5)
         
+        # Minimum character threshold
+        ttk.Label(main_frame, text="Minimum characters:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.threshold_var = tk.StringVar(value="25")
+        threshold_frame = ttk.Frame(main_frame)
+        threshold_frame.grid(row=4, column=1, sticky=tk.W, padx=5)
+        ttk.Entry(threshold_frame, textvariable=self.threshold_var, width=10).pack(side=tk.LEFT)
+        ttk.Label(threshold_frame, text="(skip entries shorter than this)", foreground="gray").pack(side=tk.LEFT, padx=5)
+        
         # File detection info
         self.detection_frame = ttk.LabelFrame(main_frame, text="Detected Tape Files", padding="10")
-        self.detection_frame.grid(row=4, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        self.detection_frame.grid(row=5, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
         
         self.detection_text = tk.Text(self.detection_frame, height=8, width=90, wrap=tk.WORD)
         self.detection_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
@@ -76,22 +84,22 @@ class TapeBatchProcessorHashGUI:
         # Process button
         self.process_button = ttk.Button(main_frame, text="Process All Tapes", 
                                         command=self.start_processing, state=tk.DISABLED)
-        self.process_button.grid(row=5, column=0, columnspan=3, pady=20)
+        self.process_button.grid(row=6, column=0, columnspan=3, pady=20)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=500)
-        self.progress.grid(row=6, column=0, columnspan=3, pady=5)
+        self.progress.grid(row=7, column=0, columnspan=3, pady=5)
         
         # Status/Results text area
-        ttk.Label(main_frame, text="Processing Status:").grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        ttk.Label(main_frame, text="Processing Status:").grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
         self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=90, wrap=tk.WORD)
-        self.status_text.grid(row=8, column=0, columnspan=3, pady=5)
+        self.status_text.grid(row=9, column=0, columnspan=3, pady=5)
         
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(8, weight=1)
+        main_frame.rowconfigure(9, weight=1)
     
     def select_folder(self):
         folder = filedialog.askdirectory(title="Select folder containing tape files")
@@ -319,6 +327,11 @@ class TapeBatchProcessorHashGUI:
                 tape_num, country = self.parse_filename(tape_filename)
                 
                 # Read tape file (small file) and filter by length
+                try:
+                    min_chars = int(self.threshold_var.get())
+                except:
+                    min_chars = 25  # Default fallback
+                
                 tape_entries = []
                 skipped_short = 0
                 
@@ -326,15 +339,15 @@ class TapeBatchProcessorHashGUI:
                     for line in f:
                         line = line.strip()
                         if line:
-                            # Filter: only entries with 25+ characters (before normalization)
-                            if len(line) >= 25:
+                            # Filter: only entries with min_chars+ characters (before normalization)
+                            if len(line) >= min_chars:
                                 tape_entries.append(line)
                             else:
                                 skipped_short += 1
                 
                 self.log(f"  Tape entries: {len(tape_entries)}")
                 if skipped_short > 0:
-                    self.log(f"  Skipped {skipped_short} short entries (< 25 chars)")
+                    self.log(f"  Skipped {skipped_short} short entries (< {min_chars} chars)")
                 
                 if len(tape_entries) > 1000:
                     self.log(f"  Large file detected - using hash-indexed search...")
@@ -407,31 +420,20 @@ class TapeBatchProcessorHashGUI:
             self.process_button.config(state=tk.NORMAL)
     
     def save_results_to_excel(self, results, output_file):
-        """Create/update Excel file with current results (incremental save)"""
+        """Create/update Excel file with 3 sheets: Summary, All Matches, All Unique"""
         
-        # Check if file exists, if so load it, otherwise create new
-        if os.path.exists(output_file):
-            try:
-                from openpyxl import load_workbook
-                wb = load_workbook(output_file)
-            except:
-                wb = Workbook()
-                if 'Sheet' in wb.sheetnames:
-                    wb.remove(wb['Sheet'])
-        else:
-            wb = Workbook()
-            if 'Sheet' in wb.sheetnames:
-                wb.remove(wb['Sheet'])
+        wb = Workbook()
         
-        # Recreate summary sheet (always up-to-date, always first)
-        if "SUMMARY" in wb.sheetnames:
-            wb.remove(wb["SUMMARY"])
-        
-        summary_sheet = wb.create_sheet("SUMMARY", 0)
+        # Remove default sheet
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
         
         # Header styling
         header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF")
+        
+        # ==================== SHEET 1: SUMMARY ====================
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
         
         # Summary headers
         headers = ["Tape", "Country", "Total Entries", "Matches", "Unique", "Match %"]
@@ -476,71 +478,65 @@ class TapeBatchProcessorHashGUI:
         summary_sheet.column_dimensions['E'].width = 12
         summary_sheet.column_dimensions['F'].width = 12
         
-        # Create/update detailed sheets for each tape
+        # ==================== SHEET 2: ALL MATCHES ====================
+        matches_sheet = wb.create_sheet("ALL MATCHES", 1)
+        
+        # Headers
+        match_headers = ["Origin File", "Tape", "Country", "Tape Entry", "Matched HSM Line", "HSM Line #"]
+        for col, header in enumerate(match_headers, 1):
+            cell = matches_sheet.cell(row=1, column=col, value=header)
+            cell.fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Data
+        row = 2
         for result in results:
-            sheet_name = f"{result['tape_num']}"
-            if result['country']:
-                sheet_name += f"_{result['country']}"
-            
-            # Excel sheet names have max 31 characters
-            if len(sheet_name) > 31:
-                sheet_name = sheet_name[:31]
-            
-            # Skip if sheet already exists (already processed)
-            if sheet_name in wb.sheetnames:
-                continue
-            
-            detail_sheet = wb.create_sheet(sheet_name)
-            
-            # Metadata
-            detail_sheet.cell(row=1, column=1, value="Tape:").font = Font(bold=True)
-            detail_sheet.cell(row=1, column=2, value=result['tape_num'])
-            detail_sheet.cell(row=2, column=1, value="Country:").font = Font(bold=True)
-            detail_sheet.cell(row=2, column=2, value=result['country'] or "N/A")
-            detail_sheet.cell(row=3, column=1, value="File:").font = Font(bold=True)
-            detail_sheet.cell(row=3, column=2, value=result['filename'])
-            detail_sheet.cell(row=4, column=1, value="Total Entries:").font = Font(bold=True)
-            detail_sheet.cell(row=4, column=2, value=result['total_entries'])
-            detail_sheet.cell(row=5, column=1, value="Matched:").font = Font(bold=True)
-            detail_sheet.cell(row=5, column=2, value=result['matched'])
-            detail_sheet.cell(row=6, column=1, value="Unique:").font = Font(bold=True)
-            detail_sheet.cell(row=6, column=2, value=result['unique'])
-            
-            # Matches section
-            detail_sheet.cell(row=8, column=1, value="MATCHED ENTRIES").font = Font(bold=True, size=12)
-            
-            match_headers = ["Tape Entry", "Matched HSM Line", "HSM Line #"]
-            for col, header in enumerate(match_headers, 1):
-                cell = detail_sheet.cell(row=9, column=col, value=header)
-                cell.fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
-                cell.font = Font(bold=True, color="FFFFFF")
-            
-            row = 10
             for tape_entry, match_list in sorted(result['matched_entries'].items()):
-                detail_sheet.cell(row=row, column=1, value=tape_entry)
                 if match_list:
                     match_line, match_line_num = match_list[0]
-                    detail_sheet.cell(row=row, column=2, value=match_line)
-                    detail_sheet.cell(row=row, column=3, value=match_line_num)
-                row += 1
-            
-            # Unique entries section
-            unique_start_row = row + 2
-            detail_sheet.cell(row=unique_start_row, column=1, value="UNIQUE ENTRIES (NOT FOUND IN HSM)").font = Font(bold=True, size=12)
-            
-            unique_header = detail_sheet.cell(row=unique_start_row + 1, column=1, value="Tape Entry")
-            unique_header.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
-            unique_header.font = Font(bold=True, color="FFFFFF")
-            
-            row = unique_start_row + 2
+                    matches_sheet.cell(row=row, column=1, value=result['filename'])
+                    matches_sheet.cell(row=row, column=2, value=result['tape_num'])
+                    matches_sheet.cell(row=row, column=3, value=result['country'] or "N/A")
+                    matches_sheet.cell(row=row, column=4, value=tape_entry)
+                    matches_sheet.cell(row=row, column=5, value=match_line)
+                    matches_sheet.cell(row=row, column=6, value=match_line_num)
+                    row += 1
+        
+        # Adjust column widths
+        matches_sheet.column_dimensions['A'].width = 30
+        matches_sheet.column_dimensions['B'].width = 12
+        matches_sheet.column_dimensions['C'].width = 10
+        matches_sheet.column_dimensions['D'].width = 50
+        matches_sheet.column_dimensions['E'].width = 60
+        matches_sheet.column_dimensions['F'].width = 12
+        
+        # ==================== SHEET 3: ALL UNIQUE ====================
+        unique_sheet = wb.create_sheet("ALL UNIQUE", 2)
+        
+        # Headers
+        unique_headers = ["Origin File", "Tape", "Country", "Tape Entry (Not Found in HSM)"]
+        for col, header in enumerate(unique_headers, 1):
+            cell = unique_sheet.cell(row=1, column=col, value=header)
+            cell.fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Data
+        row = 2
+        for result in results:
             for unique_entry in sorted(result['unique_entries']):
-                detail_sheet.cell(row=row, column=1, value=unique_entry)
+                unique_sheet.cell(row=row, column=1, value=result['filename'])
+                unique_sheet.cell(row=row, column=2, value=result['tape_num'])
+                unique_sheet.cell(row=row, column=3, value=result['country'] or "N/A")
+                unique_sheet.cell(row=row, column=4, value=unique_entry)
                 row += 1
-            
-            # Adjust column widths
-            detail_sheet.column_dimensions['A'].width = 60
-            detail_sheet.column_dimensions['B'].width = 60
-            detail_sheet.column_dimensions['C'].width = 12
+        
+        # Adjust column widths
+        unique_sheet.column_dimensions['A'].width = 30
+        unique_sheet.column_dimensions['B'].width = 12
+        unique_sheet.column_dimensions['C'].width = 10
+        unique_sheet.column_dimensions['D'].width = 60
         
         # Save workbook
         wb.save(output_file)
