@@ -49,14 +49,14 @@ class CoworkerComparisonGUI:
         subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
         
         # Coworker's matches file
-        ttk.Label(main_frame, text="Coworker's matches file:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Coworker's ud_files_on_hsm:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.matches_label = ttk.Label(main_frame, text="No file selected", 
                                        foreground="gray", wraplength=500)
         self.matches_label.grid(row=2, column=1, sticky=tk.W, padx=5)
         ttk.Button(main_frame, text="Browse...", command=self.select_matches_file).grid(row=2, column=2, padx=5)
         
         # Coworker's unique file
-        ttk.Label(main_frame, text="Coworker's unique file:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Coworker's ud_files_not_on_hsm:").grid(row=3, column=0, sticky=tk.W, pady=5)
         self.unique_label = ttk.Label(main_frame, text="No file selected", 
                                       foreground="gray", wraplength=500)
         self.unique_label.grid(row=3, column=1, sticky=tk.W, padx=5)
@@ -160,19 +160,9 @@ class CoworkerComparisonGUI:
     def extract_filename_from_coworker_matches(self, line):
         """
         Extract filename from coworker's matches line.
-        Format: UD7908.1 THAILAND/82PTH-123-RE/DOC_TAPELABEL/.82PTH-123-RE.TAPELABEL.HT30163729.748435-36.PDF
-        Returns: .82PTH-123-RE.TAPELABEL.HT30163729.748435-36.PDF (the filename part)
+        Since the file now contains simple strings like: AGO.03-80-2D...
+        Just return the line as-is (stripped).
         """
-        # Split by space and take everything after the first part (tape number)
-        parts = line.split(None, 1)  # Split on first whitespace
-        if len(parts) >= 2:
-            # The path is the second part
-            path = parts[1].strip()
-            # Extract filename (everything after last /)
-            if '/' in path:
-                filename = path.split('/')[-1]
-                return filename
-            return path
         return line.strip()
     
     def compare_files(self):
@@ -183,7 +173,7 @@ class CoworkerComparisonGUI:
             
             # Step 1: Load and deduplicate coworker's matches
             self.log("\n" + "="*70)
-            self.log("STEP 1: Loading coworker's matches file")
+            self.log("STEP 1: Loading coworker's matches file (ud_files_on_hsm)")
             self.log("="*70)
             
             coworker_matches_raw = []
@@ -191,27 +181,27 @@ class CoworkerComparisonGUI:
                 for line in f:
                     line = line.strip()
                     if line:
-                        filename = self.extract_filename_from_coworker_matches(line)
-                        coworker_matches_raw.append((line, filename))
+                        # File now contains simple strings like: AGO.03-80-2D...
+                        coworker_matches_raw.append(line)
             
             self.log(f"Loaded {len(coworker_matches_raw)} entries")
             
             # Deduplicate
             coworker_matches_unique = {}
             coworker_matches_duplicates = []
-            for full_line, filename in coworker_matches_raw:
-                norm = self.normalize_string(filename)
+            for entry in coworker_matches_raw:
+                norm = self.normalize_string(entry)
                 if norm in coworker_matches_unique:
-                    coworker_matches_duplicates.append((filename, full_line))
+                    coworker_matches_duplicates.append(entry)
                 else:
-                    coworker_matches_unique[norm] = (filename, full_line)
+                    coworker_matches_unique[norm] = entry
             
             self.log(f"Unique entries: {len(coworker_matches_unique)}")
             self.log(f"Duplicates found: {len(coworker_matches_duplicates)}")
             
             # Step 2: Load and deduplicate coworker's unique
             self.log("\n" + "="*70)
-            self.log("STEP 2: Loading coworker's unique file")
+            self.log("STEP 2: Loading coworker's unique file (ud_files_not_on_hsm)")
             self.log("="*70)
             
             coworker_unique_raw = []
@@ -537,29 +527,16 @@ class CoworkerComparisonGUI:
         header_fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF")
         
-        if is_matches:
-            sheet['A1'] = "Duplicate Entry"
-            sheet['B1'] = "Full Line from Coworker's File"
-        else:
-            sheet['A1'] = "Duplicate Entry"
-        
-        for cell in sheet[1]:
-            if cell.value:
-                cell.fill = header_fill
-                cell.font = header_font
+        sheet['A1'] = "Duplicate Entry"
+        sheet['A1'].fill = header_fill
+        sheet['A1'].font = header_font
         
         row = 2
         for item in duplicates:
-            if is_matches:
-                sheet[f'A{row}'] = item[0]
-                sheet[f'B{row}'] = item[1]
-            else:
-                sheet[f'A{row}'] = item
+            sheet[f'A{row}'] = item
             row += 1
         
         sheet.column_dimensions['A'].width = 60
-        if is_matches:
-            sheet.column_dimensions['B'].width = 80
     
     def create_comparison_sheet(self, wb, sheet_name, data, comparison_type):
         """Create sheet showing comparison results"""
