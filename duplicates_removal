@@ -117,7 +117,7 @@ class DuplicateRemoverGUI:
     def process_file(self):
         try:
             self.log("="*70)
-            self.log("STARTING DUPLICATE REMOVAL")
+            self.log("STARTING DUPLICATE REMOVAL & REPORTING")
             self.log("="*70)
             self.log(f"\nInput file: {os.path.basename(self.excel_file)}\n")
             
@@ -133,17 +133,25 @@ class DuplicateRemoverGUI:
             
             self.log("✓ Workbook loaded successfully\n")
             
+            # Create report workbook for duplicates
+            report_wb = self.create_report_workbook()
+            
             # Process ALL MATCHES sheet
             self.log("="*70)
             self.log("Processing 'ALL MATCHES' sheet")
             self.log("="*70)
             
             matches_sheet = wb["ALL MATCHES"]
-            matches_original_count, matches_unique_count, matches_duplicates = self.remove_duplicates_from_sheet(
+            matches_original_count, matches_unique_count, matches_duplicates_data = self.remove_duplicates_from_sheet(
                 matches_sheet, 
                 column_index=4,  # Column D (1-indexed: A=1, B=2, C=3, D=4)
                 sheet_name="ALL MATCHES"
             )
+            
+            # Add matches duplicates to report
+            if matches_duplicates_data:
+                self.add_duplicates_to_report(report_wb, "DUPLICATES - ALL MATCHES", 
+                                             matches_duplicates_data, is_matches=True)
             
             # Process ALL UNIQUE sheet
             self.log("\n" + "="*70)
@@ -151,20 +159,34 @@ class DuplicateRemoverGUI:
             self.log("="*70)
             
             unique_sheet = wb["ALL UNIQUE"]
-            unique_original_count, unique_unique_count, unique_duplicates = self.remove_duplicates_from_sheet(
+            unique_original_count, unique_unique_count, unique_duplicates_data = self.remove_duplicates_from_sheet(
                 unique_sheet,
                 column_index=4,  # Column D
                 sheet_name="ALL UNIQUE"
             )
             
+            # Add unique duplicates to report
+            if unique_duplicates_data:
+                self.add_duplicates_to_report(report_wb, "DUPLICATES - ALL UNIQUE", 
+                                             unique_duplicates_data, is_matches=False)
+            
             # Save cleaned workbook
-            output_file = self.get_output_filename(self.excel_file)
+            output_file = self.get_output_filename(self.excel_file, "_CLEANED")
             self.log(f"\n{'='*70}")
             self.log("Saving cleaned file...")
             wb.save(output_file)
             self.log(f"✓ Saved to: {os.path.basename(output_file)}")
             
+            # Save duplicates report
+            report_file = self.get_output_filename(self.excel_file, "_DUPLICATES_REPORT")
+            self.log(f"\nSaving duplicates report...")
+            report_wb.save(report_file)
+            self.log(f"✓ Report saved to: {os.path.basename(report_file)}")
+            
             # Summary
+            matches_duplicates = len(matches_duplicates_data)
+            unique_duplicates = len(unique_duplicates_data)
+            
             self.log(f"\n{'='*70}")
             self.log("SUMMARY")
             self.log(f"{'='*70}")
@@ -182,12 +204,17 @@ class DuplicateRemoverGUI:
             self.log(f"\n{'='*70}")
             self.log("PROCESSING COMPLETE!")
             self.log(f"{'='*70}")
+            self.log(f"\nOutput files:")
+            self.log(f"  1. Cleaned data: {os.path.basename(output_file)}")
+            self.log(f"  2. Duplicates report: {os.path.basename(report_file)}")
             
             messagebox.showinfo("Success", 
                 f"Duplicates removed successfully!\n\n"
                 f"ALL MATCHES: {matches_duplicates} duplicates removed\n"
                 f"ALL UNIQUE: {unique_duplicates} duplicates removed\n\n"
-                f"Cleaned file saved to:\n{output_file}")
+                f"Files created:\n"
+                f"1. {os.path.basename(output_file)}\n"
+                f"2. {os.path.basename(report_file)}")
             
         except Exception as e:
             self.log(f"\nERROR: {str(e)}")
@@ -210,20 +237,21 @@ class DuplicateRemoverGUI:
             sheet_name: Name for logging
         
         Returns:
-            (original_count, unique_count, duplicates_removed)
+            (original_count, unique_count, duplicates_data)
+            duplicates_data is a list of dicts with duplicate row information
         """
         self.log(f"Scanning '{sheet_name}' for duplicates in Column D (Tape Entry)...")
         
         # Read all data
         data_rows = []
-        seen_values = set()
-        duplicate_count = 0
+        seen_values = {}  # Maps value -> first occurrence row data
+        duplicates_data = []  # List of duplicate entries with full row data
         header_row = None
         
         for row_idx, row in enumerate(sheet.iter_rows(), 1):
             # First row is header
             if row_idx == 1:
-                header_row = row
+                header_row = [cell.value for cell in row]
                 continue
             
             # Get value from target column (column_index is 1-based, but row is 0-based)
@@ -235,16 +263,25 @@ class DuplicateRemoverGUI:
             # Convert to string for comparison
             cell_value_str = str(cell_value).strip()
             
+            # Get full row data
+            row_data = [cell.value for cell in row]
+            
             if cell_value_str in seen_values:
-                # This is a duplicate - skip it
-                duplicate_count += 1
+                # This is a duplicate - record it
+                duplicate_info = {
+                    'tape_entry': cell_value_str,
+                    'row_data': row_data,
+                    'first_occurrence': seen_values[cell_value_str]
+                }
+                duplicates_data.append(duplicate_info)
             else:
                 # First occurrence - keep it
-                seen_values.add(cell_value_str)
+                seen_values[cell_value_str] = row_data
                 data_rows.append(row)
         
-        original_count = len(data_rows) + duplicate_count
+        original_count = len(data_rows) + len(duplicates_data)
         unique_count = len(data_rows)
+        duplicate_count = len(duplicates_data)
         
         self.log(f"  Original entries: {original_count}")
         self.log(f"  Unique entries: {unique_count}")
@@ -278,19 +315,143 @@ class DuplicateRemoverGUI:
         else:
             self.log(f"✓ No duplicates found in '{sheet_name}'")
         
-        return original_count, unique_count, duplicate_count
+        return original_count, unique_count, duplicates_data
     
-    def get_output_filename(self, input_file):
-        """Generate output filename with _CLEANED suffix"""
+    def create_report_workbook(self):
+        """Create a new workbook for the duplicates report"""
+        from openpyxl import Workbook
+        wb = Workbook()
+        
+        # Remove default sheet
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        # Create summary sheet
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
+        
+        # Title
+        summary_sheet.merge_cells('A1:D1')
+        title_cell = summary_sheet['A1']
+        title_cell.value = "DUPLICATES REPORT"
+        title_cell.font = Font(bold=True, size=16, color="FFFFFF")
+        title_cell.fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid")
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Info
+        summary_sheet['A3'] = "This report shows all duplicate entries that were found and removed."
+        summary_sheet['A4'] = "Each duplicate is shown with:"
+        summary_sheet['A5'] = "  • The duplicate entry details"
+        summary_sheet['A6'] = "  • The first occurrence that was kept"
+        
+        summary_sheet.column_dimensions['A'].width = 80
+        
+        return wb
+    
+    def add_duplicates_to_report(self, report_wb, sheet_name, duplicates_data, is_matches=True):
+        """
+        Add duplicate entries to the report workbook.
+        
+        Args:
+            report_wb: Report workbook
+            sheet_name: Name for the sheet
+            duplicates_data: List of duplicate info dicts
+            is_matches: True if from ALL MATCHES, False if from ALL UNIQUE
+        """
+        self.log(f"Adding {len(duplicates_data)} duplicates to report sheet '{sheet_name}'...")
+        
+        sheet = report_wb.create_sheet(sheet_name)
+        
+        # Headers
+        header_fill = PatternFill(start_color="00B050" if is_matches else "FF0000", 
+                                  end_color="00B050" if is_matches else "FF0000", 
+                                  fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        if is_matches:
+            headers = ["Duplicate Entry", "Origin File", "Tape", "Country", "Matched HSM Line", "HSM Line #",
+                      "First Occurrence - Origin File", "First Occurrence - Tape", "First Occurrence - Country"]
+        else:
+            headers = ["Duplicate Entry", "Origin File", "Tape", "Country",
+                      "First Occurrence - Origin File", "First Occurrence - Tape", "First Occurrence - Country"]
+        
+        for col, header in enumerate(headers, 1):
+            cell = sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Data
+        row = 2
+        for dup in duplicates_data:
+            tape_entry = dup['tape_entry']
+            dup_row = dup['row_data']
+            first_row = dup['first_occurrence']
+            
+            # Write duplicate entry info
+            sheet.cell(row=row, column=1, value=tape_entry)
+            
+            if is_matches:
+                # ALL MATCHES: Origin File, Tape, Country, Tape Entry, Matched HSM Line, HSM Line #
+                sheet.cell(row=row, column=2, value=dup_row[0])  # Origin File
+                sheet.cell(row=row, column=3, value=dup_row[1])  # Tape
+                sheet.cell(row=row, column=4, value=dup_row[2])  # Country
+                sheet.cell(row=row, column=5, value=dup_row[4])  # Matched HSM Line
+                sheet.cell(row=row, column=6, value=dup_row[5])  # HSM Line #
+                
+                # First occurrence
+                sheet.cell(row=row, column=7, value=first_row[0])  # First Origin File
+                sheet.cell(row=row, column=8, value=first_row[1])  # First Tape
+                sheet.cell(row=row, column=9, value=first_row[2])  # First Country
+            else:
+                # ALL UNIQUE: Origin File, Tape, Country, Tape Entry
+                sheet.cell(row=row, column=2, value=dup_row[0])  # Origin File
+                sheet.cell(row=row, column=3, value=dup_row[1])  # Tape
+                sheet.cell(row=row, column=4, value=dup_row[2])  # Country
+                
+                # First occurrence
+                sheet.cell(row=row, column=5, value=first_row[0])  # First Origin File
+                sheet.cell(row=row, column=6, value=first_row[1])  # First Tape
+                sheet.cell(row=row, column=7, value=first_row[2])  # First Country
+            
+            row += 1
+        
+        # Adjust column widths
+        sheet.column_dimensions['A'].width = 50
+        sheet.column_dimensions['B'].width = 30
+        sheet.column_dimensions['C'].width = 12
+        sheet.column_dimensions['D'].width = 10
+        sheet.column_dimensions['E'].width = 60 if is_matches else 30
+        sheet.column_dimensions['F'].width = 12 if is_matches else 12
+        if is_matches:
+            sheet.column_dimensions['G'].width = 30
+            sheet.column_dimensions['H'].width = 12
+            sheet.column_dimensions['I'].width = 10
+        else:
+            sheet.column_dimensions['G'].width = 10
+        
+        # Update summary sheet with counts
+        summary_sheet = report_wb["SUMMARY"]
+        if is_matches:
+            summary_sheet['A8'] = f"Duplicates in ALL MATCHES: {len(duplicates_data)}"
+            summary_sheet['A8'].font = Font(bold=True, size=12)
+        else:
+            summary_sheet['A9'] = f"Duplicates in ALL UNIQUE: {len(duplicates_data)}"
+            summary_sheet['A9'].font = Font(bold=True, size=12)
+        
+        self.log(f"✓ Added {len(duplicates_data)} duplicates to report")
+    
+    def get_output_filename(self, input_file, suffix):
+        """Generate output filename with specified suffix"""
         directory = os.path.dirname(input_file)
         basename = os.path.basename(input_file)
         name, ext = os.path.splitext(basename)
         
-        # Remove existing _CLEANED suffix if present to avoid double-cleaning names
-        if name.endswith('_CLEANED'):
-            name = name[:-8]
+        # Remove existing suffix if present to avoid double-naming
+        for old_suffix in ['_CLEANED', '_DUPLICATES_REPORT']:
+            if name.endswith(old_suffix):
+                name = name[:-len(old_suffix)]
         
-        output_name = f"{name}_CLEANED{ext}"
+        output_name = f"{name}{suffix}{ext}"
         return os.path.join(directory, output_name)
 
 
