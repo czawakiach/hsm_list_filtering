@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""
+Duplicate Remover for HSM Comparison Results
+Removes duplicate entries from ALL MATCHES and ALL UNIQUE sheets,
+keeping only unique Tape Entry values.
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+from collections import defaultdict
+
+try:
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+except ImportError:
+    print("Installing openpyxl...")
+    import subprocess
+    subprocess.check_call(['pip', 'install', 'openpyxl', '--break-system-packages'])
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+
+class DuplicateRemoverGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Duplicate Remover - HSM Results")
+        self.root.geometry("800x600")
+        
+        self.excel_file = None
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Duplicate Remover for HSM Results", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        subtitle_label = ttk.Label(main_frame, 
+                                   text="Removes duplicate Tape Entries from ALL MATCHES and ALL UNIQUE sheets", 
+                                   font=('Arial', 10, 'italic'), foreground='blue')
+        subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+        
+        # File selection
+        ttk.Label(main_frame, text="Excel file:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.file_label = ttk.Label(main_frame, text="No file selected", 
+                                    foreground="gray", wraplength=500)
+        self.file_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_file).grid(row=2, column=2, padx=5)
+        
+        # Info box
+        info_frame = ttk.LabelFrame(main_frame, text="What this does", padding="10")
+        info_frame.grid(row=3, column=0, columnspan=3, pady=20, sticky=(tk.W, tk.E))
+        
+        info_text = tk.Text(info_frame, height=8, width=90, wrap=tk.WORD)
+        info_text.grid(row=0, column=0)
+        info_text.insert(tk.END, "This tool will:\n\n")
+        info_text.insert(tk.END, "1. Scan the 'ALL MATCHES' sheet for duplicate Tape Entries (Column D)\n")
+        info_text.insert(tk.END, "2. Keep only the FIRST occurrence of each unique entry\n")
+        info_text.insert(tk.END, "3. Remove all other duplicates\n\n")
+        info_text.insert(tk.END, "4. Scan the 'ALL UNIQUE' sheet for duplicate Tape Entries (Column D)\n")
+        info_text.insert(tk.END, "5. Keep only the FIRST occurrence of each unique entry\n")
+        info_text.insert(tk.END, "6. Remove all other duplicates\n\n")
+        info_text.insert(tk.END, "The cleaned file will be saved with '_CLEANED' appended to the filename.")
+        info_text.config(state=tk.DISABLED)
+        
+        # Process button
+        self.process_button = ttk.Button(main_frame, text="Remove Duplicates", 
+                                        command=self.start_processing, state=tk.DISABLED)
+        self.process_button.grid(row=4, column=0, columnspan=3, pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=500)
+        self.progress.grid(row=5, column=0, columnspan=3, pady=5)
+        
+        # Status text area
+        ttk.Label(main_frame, text="Processing Status:").grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=90, wrap=tk.WORD)
+        self.status_text.grid(row=7, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(7, weight=1)
+    
+    def select_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select HSM Comparison Results Excel file",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.excel_file = filepath
+            self.file_label.config(text=os.path.basename(filepath), foreground="black")
+            self.process_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_processing(self):
+        self.process_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        
+        # Run processing in separate thread
+        thread = threading.Thread(target=self.process_file)
+        thread.start()
+    
+    def process_file(self):
+        try:
+            self.log("="*70)
+            self.log("STARTING DUPLICATE REMOVAL")
+            self.log("="*70)
+            self.log(f"\nInput file: {os.path.basename(self.excel_file)}\n")
+            
+            # Load workbook
+            self.log("Loading Excel file...")
+            wb = load_workbook(self.excel_file)
+            
+            # Check if required sheets exist
+            if "ALL MATCHES" not in wb.sheetnames:
+                raise ValueError("'ALL MATCHES' sheet not found in workbook!")
+            if "ALL UNIQUE" not in wb.sheetnames:
+                raise ValueError("'ALL UNIQUE' sheet not found in workbook!")
+            
+            self.log("✓ Workbook loaded successfully\n")
+            
+            # Process ALL MATCHES sheet
+            self.log("="*70)
+            self.log("Processing 'ALL MATCHES' sheet")
+            self.log("="*70)
+            
+            matches_sheet = wb["ALL MATCHES"]
+            matches_original_count, matches_unique_count, matches_duplicates = self.remove_duplicates_from_sheet(
+                matches_sheet, 
+                column_index=4,  # Column D (1-indexed: A=1, B=2, C=3, D=4)
+                sheet_name="ALL MATCHES"
+            )
+            
+            # Process ALL UNIQUE sheet
+            self.log("\n" + "="*70)
+            self.log("Processing 'ALL UNIQUE' sheet")
+            self.log("="*70)
+            
+            unique_sheet = wb["ALL UNIQUE"]
+            unique_original_count, unique_unique_count, unique_duplicates = self.remove_duplicates_from_sheet(
+                unique_sheet,
+                column_index=4,  # Column D
+                sheet_name="ALL UNIQUE"
+            )
+            
+            # Save cleaned workbook
+            output_file = self.get_output_filename(self.excel_file)
+            self.log(f"\n{'='*70}")
+            self.log("Saving cleaned file...")
+            wb.save(output_file)
+            self.log(f"✓ Saved to: {os.path.basename(output_file)}")
+            
+            # Summary
+            self.log(f"\n{'='*70}")
+            self.log("SUMMARY")
+            self.log(f"{'='*70}")
+            self.log(f"\nALL MATCHES:")
+            self.log(f"  Original entries: {matches_original_count}")
+            self.log(f"  Unique entries: {matches_unique_count}")
+            self.log(f"  Duplicates removed: {matches_duplicates}")
+            
+            self.log(f"\nALL UNIQUE:")
+            self.log(f"  Original entries: {unique_original_count}")
+            self.log(f"  Unique entries: {unique_unique_count}")
+            self.log(f"  Duplicates removed: {unique_duplicates}")
+            
+            self.log(f"\nTotal duplicates removed: {matches_duplicates + unique_duplicates}")
+            self.log(f"\n{'='*70}")
+            self.log("PROCESSING COMPLETE!")
+            self.log(f"{'='*70}")
+            
+            messagebox.showinfo("Success", 
+                f"Duplicates removed successfully!\n\n"
+                f"ALL MATCHES: {matches_duplicates} duplicates removed\n"
+                f"ALL UNIQUE: {unique_duplicates} duplicates removed\n\n"
+                f"Cleaned file saved to:\n{output_file}")
+            
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        
+        finally:
+            self.progress.stop()
+            self.process_button.config(state=tk.NORMAL)
+    
+    def remove_duplicates_from_sheet(self, sheet, column_index, sheet_name):
+        """
+        Remove duplicate entries from a sheet based on values in specified column.
+        Keeps first occurrence of each unique value.
+        
+        Args:
+            sheet: openpyxl worksheet
+            column_index: 1-based column index (A=1, B=2, C=3, D=4, etc.)
+            sheet_name: Name for logging
+        
+        Returns:
+            (original_count, unique_count, duplicates_removed)
+        """
+        self.log(f"Scanning '{sheet_name}' for duplicates in Column D (Tape Entry)...")
+        
+        # Read all data
+        data_rows = []
+        seen_values = set()
+        duplicate_count = 0
+        header_row = None
+        
+        for row_idx, row in enumerate(sheet.iter_rows(), 1):
+            # First row is header
+            if row_idx == 1:
+                header_row = row
+                continue
+            
+            # Get value from target column (column_index is 1-based, but row is 0-based)
+            cell_value = row[column_index - 1].value
+            
+            if cell_value is None:
+                continue
+            
+            # Convert to string for comparison
+            cell_value_str = str(cell_value).strip()
+            
+            if cell_value_str in seen_values:
+                # This is a duplicate - skip it
+                duplicate_count += 1
+            else:
+                # First occurrence - keep it
+                seen_values.add(cell_value_str)
+                data_rows.append(row)
+        
+        original_count = len(data_rows) + duplicate_count
+        unique_count = len(data_rows)
+        
+        self.log(f"  Original entries: {original_count}")
+        self.log(f"  Unique entries: {unique_count}")
+        self.log(f"  Duplicates found: {duplicate_count}")
+        
+        if duplicate_count > 0:
+            self.log(f"\nRemoving {duplicate_count} duplicate(s) from '{sheet_name}'...")
+            
+            # Clear all rows except header
+            sheet.delete_rows(2, sheet.max_row)
+            
+            # Write back unique rows
+            for row_data in data_rows:
+                new_row = []
+                for cell in row_data:
+                    new_row.append(cell.value)
+                sheet.append(new_row)
+            
+            # Reapply header styling
+            header_fill = PatternFill(start_color="00B050" if "MATCHES" in sheet_name else "FF0000", 
+                                     end_color="00B050" if "MATCHES" in sheet_name else "FF0000", 
+                                     fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF")
+            
+            for cell in sheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+            
+            self.log(f"✓ Duplicates removed from '{sheet_name}'")
+        else:
+            self.log(f"✓ No duplicates found in '{sheet_name}'")
+        
+        return original_count, unique_count, duplicate_count
+    
+    def get_output_filename(self, input_file):
+        """Generate output filename with _CLEANED suffix"""
+        directory = os.path.dirname(input_file)
+        basename = os.path.basename(input_file)
+        name, ext = os.path.splitext(basename)
+        
+        # Remove existing _CLEANED suffix if present to avoid double-cleaning names
+        if name.endswith('_CLEANED'):
+            name = name[:-8]
+        
+        output_name = f"{name}_CLEANED{ext}"
+        return os.path.join(directory, output_name)
+
+
+def main():
+    root = tk.Tk()
+    app = DuplicateRemoverGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
