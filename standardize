@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""
+Data Standardization Tool
+Loads raw data from both you and your coworker, standardizes it into Excel format.
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+except ImportError:
+    print("Installing openpyxl...")
+    import subprocess
+    subprocess.check_call(['pip', 'install', 'openpyxl', '--break-system-packages'])
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+
+class DataStandardizationGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Data Standardization Tool")
+        self.root.geometry("900x650")
+        
+        self.your_folder = None
+        self.coworker_on_hsm_file = None
+        self.coworker_not_on_hsm_file = None
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Data Standardization Tool", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        subtitle_label = ttk.Label(main_frame, 
+                                   text="Load raw data from both sources and standardize into Excel", 
+                                   font=('Arial', 10, 'italic'), foreground='blue')
+        subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+        
+        # Your data folder
+        ttk.Label(main_frame, text="Your tape files folder:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.folder_label = ttk.Label(main_frame, text="No folder selected", 
+                                      foreground="gray", wraplength=500)
+        self.folder_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_folder).grid(row=2, column=2, padx=5)
+        
+        # Coworker's on HSM file
+        ttk.Label(main_frame, text="Coworker's ud_files_on_hsm:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.on_hsm_label = ttk.Label(main_frame, text="No file selected", 
+                                      foreground="gray", wraplength=500)
+        self.on_hsm_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_on_hsm_file).grid(row=3, column=2, padx=5)
+        
+        # Coworker's not on HSM file
+        ttk.Label(main_frame, text="Coworker's ud_files_not_on_hsm:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.not_on_hsm_label = ttk.Label(main_frame, text="No file selected", 
+                                          foreground="gray", wraplength=500)
+        self.not_on_hsm_label.grid(row=4, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_not_on_hsm_file).grid(row=4, column=2, padx=5)
+        
+        # File detection info
+        self.detection_frame = ttk.LabelFrame(main_frame, text="Detected Files", padding="10")
+        self.detection_frame.grid(row=5, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        
+        self.detection_text = tk.Text(self.detection_frame, height=8, width=100, wrap=tk.WORD)
+        self.detection_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        scrollbar = ttk.Scrollbar(self.detection_frame, orient="vertical", command=self.detection_text.yview)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.detection_text.configure(yscrollcommand=scrollbar.set)
+        
+        # Process button
+        self.process_button = ttk.Button(main_frame, text="Standardize Data", 
+                                        command=self.start_processing, state=tk.DISABLED)
+        self.process_button.grid(row=6, column=0, columnspan=3, pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=600)
+        self.progress.grid(row=7, column=0, columnspan=3, pady=5)
+        
+        # Status text area
+        ttk.Label(main_frame, text="Processing Status:").grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=10, width=100, wrap=tk.WORD)
+        self.status_text.grid(row=9, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(9, weight=1)
+    
+    def select_folder(self):
+        folder = filedialog.askdirectory(title="Select folder containing your tape files")
+        if folder:
+            self.your_folder = folder
+            self.folder_label.config(text=folder, foreground="black")
+            self.detect_tape_files()
+            self.check_ready()
+    
+    def select_on_hsm_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select ud_files_on_hsm file",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.coworker_on_hsm_file = filepath
+            self.on_hsm_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def select_not_on_hsm_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select ud_files_not_on_hsm file",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.coworker_not_on_hsm_file = filepath
+            self.not_on_hsm_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def detect_tape_files(self):
+        """Detect all tape files in the folder"""
+        self.detection_text.delete(1.0, tk.END)
+        
+        if not self.your_folder:
+            return
+        
+        tape_files = []
+        for filename in os.listdir(self.your_folder):
+            if '_files' in filename.lower():
+                tape_files.append(filename)
+        
+        if tape_files:
+            self.detection_text.insert(tk.END, f"Found {len(tape_files)} tape file(s) in your folder:\n\n")
+            for f in sorted(tape_files)[:10]:  # Show first 10
+                self.detection_text.insert(tk.END, f"  • {f}\n")
+            if len(tape_files) > 10:
+                self.detection_text.insert(tk.END, f"\n  ... and {len(tape_files) - 10} more files")
+        else:
+            self.detection_text.insert(tk.END, "No files matching pattern '*_files' found in folder.")
+    
+    def check_ready(self):
+        if self.your_folder and self.coworker_on_hsm_file and self.coworker_not_on_hsm_file:
+            self.process_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_processing(self):
+        self.process_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        
+        # Run processing in separate thread
+        thread = threading.Thread(target=self.process_data)
+        thread.start()
+    
+    def process_data(self):
+        try:
+            self.log("="*70)
+            self.log("STARTING DATA STANDARDIZATION")
+            self.log("="*70)
+            
+            # Step 1: Load your data
+            self.log("\n" + "="*70)
+            self.log("STEP 1: Loading YOUR data")
+            self.log("="*70)
+            
+            your_data = []
+            tape_files = []
+            
+            for filename in os.listdir(self.your_folder):
+                if '_files' in filename.lower():
+                    tape_files.append(filename)
+            
+            self.log(f"Found {len(tape_files)} tape files")
+            
+            for tape_filename in sorted(tape_files):
+                tape_path = os.path.join(self.your_folder, tape_filename)
+                self.log(f"  Loading: {tape_filename}")
+                
+                entry_count = 0
+                with open(tape_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            your_data.append({
+                                'entry': line,
+                                'origin_file': tape_filename
+                            })
+                            entry_count += 1
+                
+                self.log(f"    → {entry_count} entries")
+            
+            self.log(f"\nTotal YOUR data: {len(your_data)} entries")
+            
+            # Step 2: Load coworker's data
+            self.log("\n" + "="*70)
+            self.log("STEP 2: Loading COWORKER's data")
+            self.log("="*70)
+            
+            coworker_data = []
+            
+            # Load on_hsm
+            self.log(f"Loading: {os.path.basename(self.coworker_on_hsm_file)}")
+            on_hsm_count = 0
+            with open(self.coworker_on_hsm_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        coworker_data.append({
+                            'entry': line,
+                            'source': 'on_hsm'
+                        })
+                        on_hsm_count += 1
+            self.log(f"  → {on_hsm_count} entries")
+            
+            # Load not_on_hsm
+            self.log(f"Loading: {os.path.basename(self.coworker_not_on_hsm_file)}")
+            not_on_hsm_count = 0
+            with open(self.coworker_not_on_hsm_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        coworker_data.append({
+                            'entry': line,
+                            'source': 'not_on_hsm'
+                        })
+                        not_on_hsm_count += 1
+            self.log(f"  → {not_on_hsm_count} entries")
+            
+            self.log(f"\nTotal COWORKER data: {len(coworker_data)} entries")
+            self.log(f"  - on_hsm: {on_hsm_count}")
+            self.log(f"  - not_on_hsm: {not_on_hsm_count}")
+            
+            # Step 3: Create Excel file
+            self.log("\n" + "="*70)
+            self.log("STEP 3: Creating Excel file")
+            self.log("="*70)
+            
+            output_file = self.create_excel(your_data, coworker_data)
+            
+            # Summary
+            self.log(f"\n{'='*70}")
+            self.log("SUMMARY")
+            self.log(f"{'='*70}")
+            self.log(f"\nYOUR DATA:")
+            self.log(f"  Total entries: {len(your_data)}")
+            self.log(f"  From {len(tape_files)} tape files")
+            
+            self.log(f"\nCOWORKER DATA:")
+            self.log(f"  Total entries: {len(coworker_data)}")
+            self.log(f"  - on_hsm: {on_hsm_count}")
+            self.log(f"  - not_on_hsm: {not_on_hsm_count}")
+            
+            self.log(f"\n{'='*70}")
+            self.log("STANDARDIZATION COMPLETE!")
+            self.log(f"{'='*70}")
+            self.log(f"\nOutput file: {os.path.basename(output_file)}")
+            
+            messagebox.showinfo("Success", 
+                f"Data standardization complete!\n\n"
+                f"Your data: {len(your_data)} entries\n"
+                f"Coworker data: {len(coworker_data)} entries\n\n"
+                f"File saved to:\n{output_file}")
+            
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        
+        finally:
+            self.progress.stop()
+            self.process_button.config(state=tk.NORMAL)
+    
+    def create_excel(self, your_data, coworker_data):
+        """Create Excel file with standardized data"""
+        wb = Workbook()
+        
+        # Remove default sheet
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        # Header styling
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        # ==================== SHEET 1: YOUR DATA ====================
+        your_sheet = wb.create_sheet("YOUR DATA", 0)
+        
+        # Headers
+        your_sheet['A1'] = "Entry"
+        your_sheet['B1'] = "Origin File"
+        
+        for cell in your_sheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Data
+        for row_idx, data in enumerate(your_data, 2):
+            your_sheet[f'A{row_idx}'] = data['entry']
+            your_sheet[f'B{row_idx}'] = data['origin_file']
+        
+        # Adjust column widths
+        your_sheet.column_dimensions['A'].width = 60
+        your_sheet.column_dimensions['B'].width = 30
+        
+        self.log(f"  Created 'YOUR DATA' sheet with {len(your_data)} entries")
+        
+        # ==================== SHEET 2: COWORKER DATA ====================
+        coworker_sheet = wb.create_sheet("COWORKER DATA", 1)
+        
+        # Headers
+        coworker_sheet['A1'] = "Entry"
+        coworker_sheet['B1'] = "Source"
+        
+        for cell in coworker_sheet[1]:
+            cell.fill = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Data
+        for row_idx, data in enumerate(coworker_data, 2):
+            coworker_sheet[f'A{row_idx}'] = data['entry']
+            coworker_sheet[f'B{row_idx}'] = data['source']
+        
+        # Adjust column widths
+        coworker_sheet.column_dimensions['A'].width = 60
+        coworker_sheet.column_dimensions['B'].width = 15
+        
+        self.log(f"  Created 'COWORKER DATA' sheet with {len(coworker_data)} entries")
+        
+        # Save
+        output_file = os.path.join(self.your_folder, "Standardized_Data.xlsx")
+        wb.save(output_file)
+        self.log(f"  Excel file saved")
+        
+        return output_file
+
+
+def main():
+    root = tk.Tk()
+    app = DataStandardizationGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
