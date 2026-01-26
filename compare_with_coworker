@@ -60,9 +60,9 @@ class FastDataComparisonGUI:
         
         info_text = tk.Text(info_frame, height=10, width=100, wrap=tk.WORD)
         info_text.grid(row=0, column=0)
-        info_text.insert(tk.END, "This tool compares YOUR DATA with COWORKER DATA using fast hash-based matching.\n\n")
+        info_text.insert(tk.END, "This tool compares YOUR DATA with COWORKER DATA using fast hash-based EXACT matching.\n\n")
         info_text.insert(tk.END, "It will find:\n")
-        info_text.insert(tk.END, "  1. Entries in BOTH datasets (substring matching)\n")
+        info_text.insert(tk.END, "  1. Entries in BOTH datasets (exact match, case-insensitive, whitespace-ignored)\n")
         info_text.insert(tk.END, "  2. Entries ONLY in YOUR data (missing from coworker's)\n")
         info_text.insert(tk.END, "  3. Entries ONLY in COWORKER's data (missing from yours)\n\n")
         info_text.insert(tk.END, "Uses hash indexing for speed - processes 250k+ rows in seconds!\n\n")
@@ -154,7 +154,7 @@ class FastDataComparisonGUI:
     
     def search_with_hash_index(self, entry, normalized_entry, hash_index, ngram_size=10):
         """
-        Search for entry in hash index using substring matching.
+        Search for entry in hash index using EXACT matching.
         
         Returns:
             List of matches (original_entry, metadata)
@@ -167,10 +167,10 @@ class FastDataComparisonGUI:
             first_ngram = normalized_entry[:ngram_size]
             candidates = hash_index.get(first_ngram, [])
         
-        # Check candidates for substring match
+        # Check candidates for EXACT match (not substring)
         matches = []
         for orig_entry, norm_entry, metadata in candidates:
-            if normalized_entry in norm_entry or norm_entry in normalized_entry:
+            if normalized_entry == norm_entry:  # EXACT match only
                 matches.append((orig_entry, metadata))
         
         return matches
