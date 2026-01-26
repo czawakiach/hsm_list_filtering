@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Coworker Results Comparison Tool
-Compares coworker's text files with your Excel results and identifies differences.
+Fast Data Comparison Tool
+Compares standardized data between you and your coworker using hash-based indexing.
+Optimized for large datasets (250k+ rows).
 """
 
 import tkinter as tk
@@ -21,15 +22,13 @@ except ImportError:
     from openpyxl.styles import Font, PatternFill, Alignment
 
 
-class CoworkerComparisonGUI:
+class FastDataComparisonGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Coworker Results Comparison Tool")
-        self.root.geometry("900x700")
+        self.root.title("Fast Data Comparison Tool")
+        self.root.geometry("900x600")
         
-        self.coworker_matches_file = None
-        self.coworker_unique_file = None
-        self.your_excel_file = None
+        self.standardized_file = None
         
         self.setup_ui()
     
@@ -39,104 +38,65 @@ class CoworkerComparisonGUI:
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Title
-        title_label = ttk.Label(main_frame, text="Coworker Results Comparison Tool", 
+        title_label = ttk.Label(main_frame, text="Fast Data Comparison Tool", 
                                 font=('Arial', 16, 'bold'))
         title_label.grid(row=0, column=0, columnspan=3, pady=10)
         
         subtitle_label = ttk.Label(main_frame, 
-                                   text="Compare coworker's text files with your Excel results", 
+                                   text="⚡ Optimized for large datasets (250k+ rows)", 
                                    font=('Arial', 10, 'italic'), foreground='blue')
         subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
         
-        # Coworker's matches file
-        ttk.Label(main_frame, text="Coworker's ud_files_on_hsm:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.matches_label = ttk.Label(main_frame, text="No file selected", 
-                                       foreground="gray", wraplength=500)
-        self.matches_label.grid(row=2, column=1, sticky=tk.W, padx=5)
-        ttk.Button(main_frame, text="Browse...", command=self.select_matches_file).grid(row=2, column=2, padx=5)
-        
-        # Coworker's unique file
-        ttk.Label(main_frame, text="Coworker's ud_files_not_on_hsm:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        self.unique_label = ttk.Label(main_frame, text="No file selected", 
-                                      foreground="gray", wraplength=500)
-        self.unique_label.grid(row=3, column=1, sticky=tk.W, padx=5)
-        ttk.Button(main_frame, text="Browse...", command=self.select_unique_file).grid(row=3, column=2, padx=5)
-        
-        # Your Excel file
-        ttk.Label(main_frame, text="Your Excel results:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.excel_label = ttk.Label(main_frame, text="No file selected", 
-                                     foreground="gray", wraplength=500)
-        self.excel_label.grid(row=4, column=1, sticky=tk.W, padx=5)
-        ttk.Button(main_frame, text="Browse...", command=self.select_excel_file).grid(row=4, column=2, padx=5)
+        # File selection
+        ttk.Label(main_frame, text="Standardized data file:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.file_label = ttk.Label(main_frame, text="No file selected", 
+                                    foreground="gray", wraplength=500)
+        self.file_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_file).grid(row=2, column=2, padx=5)
         
         # Info box
         info_frame = ttk.LabelFrame(main_frame, text="What this does", padding="10")
-        info_frame.grid(row=5, column=0, columnspan=3, pady=20, sticky=(tk.W, tk.E))
+        info_frame.grid(row=3, column=0, columnspan=3, pady=20, sticky=(tk.W, tk.E))
         
-        info_text = tk.Text(info_frame, height=8, width=100, wrap=tk.WORD)
+        info_text = tk.Text(info_frame, height=10, width=100, wrap=tk.WORD)
         info_text.grid(row=0, column=0)
-        info_text.insert(tk.END, "This tool will:\n\n")
-        info_text.insert(tk.END, "1. Check for duplicates in coworker's files and remove them\n")
-        info_text.insert(tk.END, "2. Compare coworker's matches with your ALL MATCHES sheet\n")
-        info_text.insert(tk.END, "3. Compare coworker's unique with your ALL UNIQUE sheet\n")
-        info_text.insert(tk.END, "4. Report differences:\n")
-        info_text.insert(tk.END, "   • Entries in coworker's files but NOT in yours\n")
-        info_text.insert(tk.END, "   • Entries in your files but NOT in coworker's\n\n")
-        info_text.insert(tk.END, "Output: Comprehensive comparison report in Excel format")
+        info_text.insert(tk.END, "This tool compares YOUR DATA with COWORKER DATA using fast hash-based matching.\n\n")
+        info_text.insert(tk.END, "It will find:\n")
+        info_text.insert(tk.END, "  1. Entries in BOTH datasets (substring matching)\n")
+        info_text.insert(tk.END, "  2. Entries ONLY in YOUR data (missing from coworker's)\n")
+        info_text.insert(tk.END, "  3. Entries ONLY in COWORKER's data (missing from yours)\n\n")
+        info_text.insert(tk.END, "Uses hash indexing for speed - processes 250k+ rows in seconds!\n\n")
+        info_text.insert(tk.END, "Output: Detailed comparison report in Excel format")
         info_text.config(state=tk.DISABLED)
         
         # Compare button
-        self.compare_button = ttk.Button(main_frame, text="Compare Results", 
+        self.compare_button = ttk.Button(main_frame, text="Compare Data", 
                                         command=self.start_comparison, state=tk.DISABLED)
-        self.compare_button.grid(row=6, column=0, columnspan=3, pady=20)
+        self.compare_button.grid(row=4, column=0, columnspan=3, pady=20)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=600)
-        self.progress.grid(row=7, column=0, columnspan=3, pady=5)
+        self.progress.grid(row=5, column=0, columnspan=3, pady=5)
         
         # Status text area
-        ttk.Label(main_frame, text="Processing Status:").grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
-        self.status_text = scrolledtext.ScrolledText(main_frame, height=12, width=100, wrap=tk.WORD)
-        self.status_text.grid(row=9, column=0, columnspan=3, pady=5)
+        ttk.Label(main_frame, text="Processing Status:").grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=100, wrap=tk.WORD)
+        self.status_text.grid(row=7, column=0, columnspan=3, pady=5)
         
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(9, weight=1)
+        main_frame.rowconfigure(7, weight=1)
     
-    def select_matches_file(self):
+    def select_file(self):
         filepath = filedialog.askopenfilename(
-            title="Select coworker's matches file",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filepath:
-            self.coworker_matches_file = filepath
-            self.matches_label.config(text=os.path.basename(filepath), foreground="black")
-            self.check_ready()
-    
-    def select_unique_file(self):
-        filepath = filedialog.askopenfilename(
-            title="Select coworker's unique file",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filepath:
-            self.coworker_unique_file = filepath
-            self.unique_label.config(text=os.path.basename(filepath), foreground="black")
-            self.check_ready()
-    
-    def select_excel_file(self):
-        filepath = filedialog.askopenfilename(
-            title="Select your Excel results file",
+            title="Select Standardized_Data.xlsx file",
             filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
         )
         if filepath:
-            self.your_excel_file = filepath
-            self.excel_label.config(text=os.path.basename(filepath), foreground="black")
-            self.check_ready()
-    
-    def check_ready(self):
-        if self.coworker_matches_file and self.coworker_unique_file and self.your_excel_file:
+            self.standardized_file = filepath
+            self.file_label.config(text=os.path.basename(filepath), foreground="black")
             self.compare_button.config(state=tk.NORMAL)
     
     def log(self, message):
@@ -150,139 +110,191 @@ class CoworkerComparisonGUI:
         self.progress.start()
         
         # Run comparison in separate thread
-        thread = threading.Thread(target=self.compare_files)
+        thread = threading.Thread(target=self.compare_data)
         thread.start()
     
     def normalize_string(self, s):
         """Normalize string: uppercase and remove all whitespace"""
         return ''.join(s.upper().split())
     
-    def extract_filename_from_coworker_matches(self, line):
+    def build_hash_index(self, entries, sheet_name):
         """
-        Extract filename from coworker's matches line.
-        Since the file now contains simple strings like: AGO.03-80-2D...
-        Just return the line as-is (stripped).
+        Build hash index for fast substring lookups.
+        
+        Args:
+            entries: List of (entry_string, metadata) tuples
+            sheet_name: Name for logging
+        
+        Returns:
+            Dictionary mapping n-grams to lists of entries
         """
-        return line.strip()
+        self.log(f"Building hash index for {sheet_name}...")
+        
+        ngram_size = 10
+        hash_index = defaultdict(list)
+        
+        for idx, (entry, metadata) in enumerate(entries, 1):
+            normalized = self.normalize_string(entry)
+            
+            # Extract all n-grams
+            if len(normalized) >= ngram_size:
+                for i in range(len(normalized) - ngram_size + 1):
+                    ngram = normalized[i:i + ngram_size]
+                    hash_index[ngram].append((entry, normalized, metadata))
+            else:
+                # For short entries, use the whole string as key
+                hash_index[normalized].append((entry, normalized, metadata))
+            
+            if idx % 50000 == 0:
+                self.log(f"  Indexed {idx:,} entries... ({len(hash_index):,} n-grams)")
+        
+        self.log(f"✓ Index complete: {len(entries):,} entries, {len(hash_index):,} n-grams\n")
+        
+        return hash_index
     
-    def compare_files(self):
+    def search_with_hash_index(self, entry, normalized_entry, hash_index, ngram_size=10):
+        """
+        Search for entry in hash index using substring matching.
+        
+        Returns:
+            List of matches (original_entry, metadata)
+        """
+        if len(normalized_entry) < ngram_size:
+            # For short entries, look up directly
+            candidates = hash_index.get(normalized_entry, [])
+        else:
+            # Extract first n-gram and get candidates
+            first_ngram = normalized_entry[:ngram_size]
+            candidates = hash_index.get(first_ngram, [])
+        
+        # Check candidates for substring match
+        matches = []
+        for orig_entry, norm_entry, metadata in candidates:
+            if normalized_entry in norm_entry or norm_entry in normalized_entry:
+                matches.append((orig_entry, metadata))
+        
+        return matches
+    
+    def compare_data(self):
         try:
             self.log("="*70)
-            self.log("STARTING COMPARISON")
+            self.log("STARTING FAST DATA COMPARISON")
             self.log("="*70)
             
-            # Step 1: Load and deduplicate coworker's matches
+            # Load Excel file
+            self.log(f"\nLoading: {os.path.basename(self.standardized_file)}")
+            wb = load_workbook(self.standardized_file)
+            
+            if "YOUR DATA" not in wb.sheetnames:
+                raise ValueError("'YOUR DATA' sheet not found!")
+            if "COWORKER DATA" not in wb.sheetnames:
+                raise ValueError("'COWORKER DATA' sheet not found!")
+            
+            # Step 1: Load YOUR data
             self.log("\n" + "="*70)
-            self.log("STEP 1: Loading coworker's matches file (ud_files_on_hsm)")
+            self.log("STEP 1: Loading YOUR DATA")
             self.log("="*70)
             
-            coworker_matches_raw = []
-            with open(self.coworker_matches_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        # File now contains simple strings like: AGO.03-80-2D...
-                        coworker_matches_raw.append(line)
+            your_data = []
+            your_sheet = wb["YOUR DATA"]
             
-            self.log(f"Loaded {len(coworker_matches_raw)} entries")
+            for row_idx, row in enumerate(your_sheet.iter_rows(min_row=2), 2):
+                entry = row[0].value
+                origin_file = row[1].value
+                
+                if entry:
+                    your_data.append((str(entry), {'origin_file': origin_file}))
+                
+                if row_idx % 50000 == 2:
+                    self.log(f"  Loaded {row_idx - 1:,} rows...")
             
-            # Deduplicate
-            coworker_matches_unique = {}
-            coworker_matches_duplicates = []
-            for entry in coworker_matches_raw:
-                norm = self.normalize_string(entry)
-                if norm in coworker_matches_unique:
-                    coworker_matches_duplicates.append(entry)
+            self.log(f"✓ Loaded {len(your_data):,} entries from YOUR DATA")
+            
+            # Step 2: Load COWORKER data
+            self.log("\n" + "="*70)
+            self.log("STEP 2: Loading COWORKER DATA")
+            self.log("="*70)
+            
+            coworker_data = []
+            coworker_sheet = wb["COWORKER DATA"]
+            
+            for row_idx, row in enumerate(coworker_sheet.iter_rows(min_row=2), 2):
+                entry = row[0].value
+                source = row[1].value
+                
+                if entry:
+                    coworker_data.append((str(entry), {'source': source}))
+                
+                if row_idx % 50000 == 2:
+                    self.log(f"  Loaded {row_idx - 1:,} rows...")
+            
+            self.log(f"✓ Loaded {len(coworker_data):,} entries from COWORKER DATA")
+            
+            # Step 3: Build hash index for COWORKER data (larger dataset gets indexed)
+            self.log("\n" + "="*70)
+            self.log("STEP 3: Building hash index for COWORKER DATA")
+            self.log("="*70)
+            
+            coworker_index = self.build_hash_index(coworker_data, "COWORKER DATA")
+            
+            # Step 4: Compare YOUR data against COWORKER index
+            self.log("="*70)
+            self.log("STEP 4: Comparing YOUR DATA with COWORKER DATA")
+            self.log("="*70)
+            
+            in_both = []
+            only_in_yours = []
+            
+            for idx, (your_entry, your_meta) in enumerate(your_data, 1):
+                normalized = self.normalize_string(your_entry)
+                matches = self.search_with_hash_index(your_entry, normalized, coworker_index)
+                
+                if matches:
+                    # Found in both
+                    for coworker_entry, coworker_meta in matches:
+                        in_both.append({
+                            'your_entry': your_entry,
+                            'your_origin': your_meta['origin_file'],
+                            'coworker_entry': coworker_entry,
+                            'coworker_source': coworker_meta['source']
+                        })
                 else:
-                    coworker_matches_unique[norm] = entry
+                    # Only in yours
+                    only_in_yours.append({
+                        'entry': your_entry,
+                        'origin_file': your_meta['origin_file']
+                    })
+                
+                if idx % 50000 == 0:
+                    self.log(f"  Processed {idx:,}/{len(your_data):,} entries...")
             
-            self.log(f"Unique entries: {len(coworker_matches_unique)}")
-            self.log(f"Duplicates found: {len(coworker_matches_duplicates)}")
+            self.log(f"✓ Comparison complete")
             
-            # Step 2: Load and deduplicate coworker's unique
+            # Step 5: Find entries only in COWORKER data
             self.log("\n" + "="*70)
-            self.log("STEP 2: Loading coworker's unique file (ud_files_not_on_hsm)")
+            self.log("STEP 5: Finding entries ONLY in COWORKER DATA")
             self.log("="*70)
             
-            coworker_unique_raw = []
-            with open(self.coworker_unique_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        coworker_unique_raw.append(line)
+            # Build index for YOUR data
+            your_index = self.build_hash_index(your_data, "YOUR DATA")
             
-            self.log(f"Loaded {len(coworker_unique_raw)} entries")
+            only_in_coworker = []
             
-            # Deduplicate
-            coworker_unique_unique = {}
-            coworker_unique_duplicates = []
-            for entry in coworker_unique_raw:
-                norm = self.normalize_string(entry)
-                if norm in coworker_unique_unique:
-                    coworker_unique_duplicates.append(entry)
-                else:
-                    coworker_unique_unique[norm] = entry
+            for idx, (coworker_entry, coworker_meta) in enumerate(coworker_data, 1):
+                normalized = self.normalize_string(coworker_entry)
+                matches = self.search_with_hash_index(coworker_entry, normalized, your_index)
+                
+                if not matches:
+                    # Only in coworker's
+                    only_in_coworker.append({
+                        'entry': coworker_entry,
+                        'source': coworker_meta['source']
+                    })
+                
+                if idx % 50000 == 0:
+                    self.log(f"  Processed {idx:,}/{len(coworker_data):,} entries...")
             
-            self.log(f"Unique entries: {len(coworker_unique_unique)}")
-            self.log(f"Duplicates found: {len(coworker_unique_duplicates)}")
-            
-            # Step 3: Load your Excel results
-            self.log("\n" + "="*70)
-            self.log("STEP 3: Loading your Excel results")
-            self.log("="*70)
-            
-            wb = load_workbook(self.your_excel_file)
-            
-            if "ALL MATCHES" not in wb.sheetnames:
-                raise ValueError("'ALL MATCHES' sheet not found!")
-            if "ALL UNIQUE" not in wb.sheetnames:
-                raise ValueError("'ALL UNIQUE' sheet not found!")
-            
-            # Load your matches (Column D = Tape Entry)
-            your_matches = {}
-            matches_sheet = wb["ALL MATCHES"]
-            for row_idx, row in enumerate(matches_sheet.iter_rows(min_row=2), 2):
-                tape_entry = row[3].value  # Column D (0-indexed: 3)
-                if tape_entry:
-                    norm = self.normalize_string(str(tape_entry))
-                    your_matches[norm] = str(tape_entry)
-            
-            self.log(f"Your ALL MATCHES: {len(your_matches)} entries")
-            
-            # Load your unique (Column D = Tape Entry)
-            your_unique = {}
-            unique_sheet = wb["ALL UNIQUE"]
-            for row_idx, row in enumerate(unique_sheet.iter_rows(min_row=2), 2):
-                tape_entry = row[3].value  # Column D
-                if tape_entry:
-                    norm = self.normalize_string(str(tape_entry))
-                    your_unique[norm] = str(tape_entry)
-            
-            self.log(f"Your ALL UNIQUE: {len(your_unique)} entries")
-            
-            # Step 4: Compare matches
-            self.log("\n" + "="*70)
-            self.log("STEP 4: Comparing MATCHES")
-            self.log("="*70)
-            
-            matches_comparison = self.compare_sets(
-                coworker_matches_unique,
-                your_matches,
-                "Coworker's Matches",
-                "Your Matches"
-            )
-            
-            # Step 5: Compare unique
-            self.log("\n" + "="*70)
-            self.log("STEP 5: Comparing UNIQUE")
-            self.log("="*70)
-            
-            unique_comparison = self.compare_sets(
-                coworker_unique_unique,
-                your_unique,
-                "Coworker's Unique",
-                "Your Unique"
-            )
+            self.log(f"✓ Found entries only in COWORKER DATA")
             
             # Step 6: Create comparison report
             self.log("\n" + "="*70)
@@ -290,37 +302,30 @@ class CoworkerComparisonGUI:
             self.log("="*70)
             
             output_file = self.create_comparison_report(
-                coworker_matches_duplicates,
-                coworker_unique_duplicates,
-                matches_comparison,
-                unique_comparison,
-                coworker_matches_unique,
-                coworker_unique_unique,
-                your_matches,
-                your_unique
+                in_both,
+                only_in_yours,
+                only_in_coworker,
+                len(your_data),
+                len(coworker_data)
             )
             
             # Summary
-            self.log("\n" + "="*70)
+            self.log(f"\n{'='*70}")
             self.log("SUMMARY")
-            self.log("="*70)
-            self.log(f"\nCoworker's files:")
-            self.log(f"  Matches: {len(coworker_matches_unique)} unique ({len(coworker_matches_duplicates)} duplicates removed)")
-            self.log(f"  Unique: {len(coworker_unique_unique)} unique ({len(coworker_unique_duplicates)} duplicates removed)")
+            self.log(f"{'='*70}")
+            self.log(f"\nYOUR DATA: {len(your_data):,} entries")
+            self.log(f"COWORKER DATA: {len(coworker_data):,} entries")
+            self.log(f"\nComparison Results:")
+            self.log(f"  ✓ In BOTH: {len(in_both):,} matches")
+            self.log(f"  → Only in YOURS: {len(only_in_yours):,} entries")
+            self.log(f"  ← Only in COWORKER's: {len(only_in_coworker):,} entries")
             
-            self.log(f"\nYour files:")
-            self.log(f"  Matches: {len(your_matches)} entries")
-            self.log(f"  Unique: {len(your_unique)} entries")
+            match_rate_yours = (len(in_both) / len(your_data) * 100) if your_data else 0
+            match_rate_coworker = (len(in_both) / len(coworker_data) * 100) if coworker_data else 0
             
-            self.log(f"\nMatches Comparison:")
-            self.log(f"  In both: {matches_comparison['in_both']}")
-            self.log(f"  Only in coworker's: {matches_comparison['only_in_first']}")
-            self.log(f"  Only in yours: {matches_comparison['only_in_second']}")
-            
-            self.log(f"\nUnique Comparison:")
-            self.log(f"  In both: {unique_comparison['in_both']}")
-            self.log(f"  Only in coworker's: {unique_comparison['only_in_first']}")
-            self.log(f"  Only in yours: {unique_comparison['only_in_second']}")
+            self.log(f"\nMatch Rates:")
+            self.log(f"  Your data matched: {match_rate_yours:.1f}%")
+            self.log(f"  Coworker data matched: {match_rate_coworker:.1f}%")
             
             self.log(f"\n{'='*70}")
             self.log("COMPARISON COMPLETE!")
@@ -329,8 +334,10 @@ class CoworkerComparisonGUI:
             
             messagebox.showinfo("Success", 
                 f"Comparison complete!\n\n"
-                f"Report saved to:\n{output_file}\n\n"
-                f"Check the Excel file for detailed analysis.")
+                f"In both: {len(in_both):,}\n"
+                f"Only in yours: {len(only_in_yours):,}\n"
+                f"Only in coworker's: {len(only_in_coworker):,}\n\n"
+                f"Report saved to:\n{output_file}")
             
         except Exception as e:
             self.log(f"\nERROR: {str(e)}")
@@ -342,248 +349,138 @@ class CoworkerComparisonGUI:
             self.progress.stop()
             self.compare_button.config(state=tk.NORMAL)
     
-    def compare_sets(self, set1_dict, set2_dict, name1, name2):
-        """
-        Compare two sets and find differences using substring matching.
-        
-        Args:
-            set1_dict: Dict of normalized -> original for first set
-            set2_dict: Dict of normalized -> original for second set
-            name1: Name of first set
-            name2: Name of second set
-        
-        Returns:
-            Dict with comparison results
-        """
-        # Find matches (entries from set1 that appear as substring in set2)
-        in_both = []
-        only_in_first = []
-        
-        for norm1, orig1 in set1_dict.items():
-            found = False
-            for norm2, orig2 in set2_dict.items():
-                if norm1 in norm2 or norm2 in norm1:
-                    in_both.append((orig1, orig2))
-                    found = True
-                    break
-            if not found:
-                only_in_first.append(orig1)
-        
-        # Find entries only in set2 (not matched with set1)
-        matched_set2 = set()
-        for norm1, orig1 in set1_dict.items():
-            for norm2, orig2 in set2_dict.items():
-                if norm1 in norm2 or norm2 in norm1:
-                    matched_set2.add(norm2)
-        
-        only_in_second = [orig for norm, orig in set2_dict.items() if norm not in matched_set2]
-        
-        self.log(f"  In both {name1} and {name2}: {len(in_both)}")
-        self.log(f"  Only in {name1}: {len(only_in_first)}")
-        self.log(f"  Only in {name2}: {len(only_in_second)}")
-        
-        return {
-            'in_both': len(in_both),
-            'only_in_first': len(only_in_first),
-            'only_in_second': len(only_in_second),
-            'in_both_list': in_both,
-            'only_in_first_list': only_in_first,
-            'only_in_second_list': only_in_second
-        }
-    
-    def create_comparison_report(self, matches_dups, unique_dups, matches_comp, unique_comp,
-                                 coworker_matches, coworker_unique, your_matches, your_unique):
-        """Create comprehensive comparison report in Excel"""
+    def create_comparison_report(self, in_both, only_yours, only_coworker, your_total, coworker_total):
+        """Create detailed comparison report in Excel"""
         
         wb = Workbook()
         if 'Sheet' in wb.sheetnames:
             wb.remove(wb['Sheet'])
         
-        # Sheet 1: Summary
-        self.create_summary_sheet(wb, matches_dups, unique_dups, matches_comp, unique_comp,
-                                 coworker_matches, coworker_unique, your_matches, your_unique)
+        # Header styling
+        header_fill_blue = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_fill_green = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        header_fill_orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        header_fill_red = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
         
-        # Sheet 2: Coworker's Duplicates - Matches
-        if matches_dups:
-            self.create_duplicates_sheet(wb, "Coworker Duplicates - Matches", matches_dups, is_matches=True)
+        # ==================== SHEET 1: SUMMARY ====================
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
         
-        # Sheet 3: Coworker's Duplicates - Unique
-        if unique_dups:
-            self.create_duplicates_sheet(wb, "Coworker Duplicates - Unique", unique_dups, is_matches=False)
+        summary_sheet['A1'] = "DATA COMPARISON SUMMARY"
+        summary_sheet['A1'].font = Font(bold=True, size=16)
+        summary_sheet.merge_cells('A1:D1')
         
-        # Sheet 4: Matches - In Both
-        self.create_comparison_sheet(wb, "Matches - In Both", matches_comp['in_both_list'], comparison_type="both")
+        row = 3
+        summary_sheet[f'A{row}'] = "Total Entries:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
+        summary_sheet[f'A{row}'] = "Your data:"
+        summary_sheet[f'B{row}'] = your_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
+        summary_sheet[f'A{row}'] = "Coworker data:"
+        summary_sheet[f'B{row}'] = coworker_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 3
         
-        # Sheet 5: Matches - Only Coworker
-        self.create_comparison_sheet(wb, "Matches - Only Coworker", matches_comp['only_in_first_list'], comparison_type="coworker")
+        summary_sheet[f'A{row}'] = "Comparison Results:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
         
-        # Sheet 6: Matches - Only You
-        self.create_comparison_sheet(wb, "Matches - Only You", matches_comp['only_in_second_list'], comparison_type="you")
+        summary_sheet[f'A{row}'] = "In BOTH:"
+        summary_sheet[f'B{row}'] = len(in_both)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
         
-        # Sheet 7: Unique - In Both
-        self.create_comparison_sheet(wb, "Unique - In Both", unique_comp['in_both_list'], comparison_type="both")
+        summary_sheet[f'A{row}'] = "Only in YOURS:"
+        summary_sheet[f'B{row}'] = len(only_yours)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
         
-        # Sheet 8: Unique - Only Coworker
-        self.create_comparison_sheet(wb, "Unique - Only Coworker", unique_comp['only_in_first_list'], comparison_type="coworker")
+        summary_sheet[f'A{row}'] = "Only in COWORKER's:"
+        summary_sheet[f'B{row}'] = len(only_coworker)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
         
-        # Sheet 9: Unique - Only You
-        self.create_comparison_sheet(wb, "Unique - Only You", unique_comp['only_in_second_list'], comparison_type="you")
+        summary_sheet.column_dimensions['A'].width = 25
+        summary_sheet.column_dimensions['B'].width = 15
+        
+        self.log("  Created SUMMARY sheet")
+        
+        # ==================== SHEET 2: IN BOTH ====================
+        both_sheet = wb.create_sheet("IN BOTH", 1)
+        
+        headers = ["Your Entry", "Your Origin File", "Coworker Entry", "Coworker Source"]
+        for col, header in enumerate(headers, 1):
+            cell = both_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_green
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(in_both, 2):
+            both_sheet.cell(row=row_idx, column=1, value=item['your_entry'])
+            both_sheet.cell(row=row_idx, column=2, value=item['your_origin'])
+            both_sheet.cell(row=row_idx, column=3, value=item['coworker_entry'])
+            both_sheet.cell(row=row_idx, column=4, value=item['coworker_source'])
+        
+        both_sheet.column_dimensions['A'].width = 60
+        both_sheet.column_dimensions['B'].width = 30
+        both_sheet.column_dimensions['C'].width = 60
+        both_sheet.column_dimensions['D'].width = 15
+        
+        self.log(f"  Created IN BOTH sheet ({len(in_both):,} entries)")
+        
+        # ==================== SHEET 3: ONLY IN YOURS ====================
+        yours_sheet = wb.create_sheet("ONLY IN YOURS", 2)
+        
+        headers = ["Entry", "Origin File"]
+        for col, header in enumerate(headers, 1):
+            cell = yours_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_orange
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(only_yours, 2):
+            yours_sheet.cell(row=row_idx, column=1, value=item['entry'])
+            yours_sheet.cell(row=row_idx, column=2, value=item['origin_file'])
+        
+        yours_sheet.column_dimensions['A'].width = 60
+        yours_sheet.column_dimensions['B'].width = 30
+        
+        self.log(f"  Created ONLY IN YOURS sheet ({len(only_yours):,} entries)")
+        
+        # ==================== SHEET 4: ONLY IN COWORKER ====================
+        coworker_sheet = wb.create_sheet("ONLY IN COWORKER", 3)
+        
+        headers = ["Entry", "Source"]
+        for col, header in enumerate(headers, 1):
+            cell = coworker_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_red
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(only_coworker, 2):
+            coworker_sheet.cell(row=row_idx, column=1, value=item['entry'])
+            coworker_sheet.cell(row=row_idx, column=2, value=item['source'])
+        
+        coworker_sheet.column_dimensions['A'].width = 60
+        coworker_sheet.column_dimensions['B'].width = 15
+        
+        self.log(f"  Created ONLY IN COWORKER sheet ({len(only_coworker):,} entries)")
         
         # Save
-        directory = os.path.dirname(self.your_excel_file)
-        output_file = os.path.join(directory, "Coworker_Comparison_Report.xlsx")
+        directory = os.path.dirname(self.standardized_file)
+        output_file = os.path.join(directory, "Comparison_Report.xlsx")
         wb.save(output_file)
         
         return output_file
-    
-    def create_summary_sheet(self, wb, matches_dups, unique_dups, matches_comp, unique_comp,
-                            coworker_matches, coworker_unique, your_matches, your_unique):
-        """Create summary sheet"""
-        sheet = wb.create_sheet("SUMMARY", 0)
-        
-        # Title
-        sheet['A1'] = "COWORKER COMPARISON REPORT"
-        sheet['A1'].font = Font(bold=True, size=16, color="FFFFFF")
-        sheet['A1'].fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-        sheet.merge_cells('A1:D1')
-        
-        row = 3
-        
-        # Section 1: Coworker's Data
-        sheet[f'A{row}'] = "COWORKER'S DATA"
-        sheet[f'A{row}'].font = Font(bold=True, size=14)
-        row += 2
-        
-        sheet[f'A{row}'] = "Matches:"
-        sheet[f'B{row}'] = len(coworker_matches)
-        sheet[f'C{row}'] = f"({len(matches_dups)} duplicates removed)"
-        row += 1
-        
-        sheet[f'A{row}'] = "Unique:"
-        sheet[f'B{row}'] = len(coworker_unique)
-        sheet[f'C{row}'] = f"({len(unique_dups)} duplicates removed)"
-        row += 3
-        
-        # Section 2: Your Data
-        sheet[f'A{row}'] = "YOUR DATA"
-        sheet[f'A{row}'].font = Font(bold=True, size=14)
-        row += 2
-        
-        sheet[f'A{row}'] = "Matches:"
-        sheet[f'B{row}'] = len(your_matches)
-        row += 1
-        
-        sheet[f'A{row}'] = "Unique:"
-        sheet[f'B{row}'] = len(your_unique)
-        row += 3
-        
-        # Section 3: Matches Comparison
-        sheet[f'A{row}'] = "MATCHES COMPARISON"
-        sheet[f'A{row}'].font = Font(bold=True, size=14)
-        row += 2
-        
-        sheet[f'A{row}'] = "In both:"
-        sheet[f'B{row}'] = matches_comp['in_both']
-        sheet[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        row += 1
-        
-        sheet[f'A{row}'] = "Only in coworker's:"
-        sheet[f'B{row}'] = matches_comp['only_in_first']
-        sheet[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-        row += 1
-        
-        sheet[f'A{row}'] = "Only in yours:"
-        sheet[f'B{row}'] = matches_comp['only_in_second']
-        sheet[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        row += 3
-        
-        # Section 4: Unique Comparison
-        sheet[f'A{row}'] = "UNIQUE COMPARISON"
-        sheet[f'A{row}'].font = Font(bold=True, size=14)
-        row += 2
-        
-        sheet[f'A{row}'] = "In both:"
-        sheet[f'B{row}'] = unique_comp['in_both']
-        sheet[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        row += 1
-        
-        sheet[f'A{row}'] = "Only in coworker's:"
-        sheet[f'B{row}'] = unique_comp['only_in_first']
-        sheet[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-        row += 1
-        
-        sheet[f'A{row}'] = "Only in yours:"
-        sheet[f'B{row}'] = unique_comp['only_in_second']
-        sheet[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        
-        sheet.column_dimensions['A'].width = 30
-        sheet.column_dimensions['B'].width = 15
-        sheet.column_dimensions['C'].width = 30
-    
-    def create_duplicates_sheet(self, wb, sheet_name, duplicates, is_matches):
-        """Create sheet showing duplicates"""
-        sheet = wb.create_sheet(sheet_name)
-        
-        header_fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid")
-        header_font = Font(bold=True, color="FFFFFF")
-        
-        sheet['A1'] = "Duplicate Entry"
-        sheet['A1'].fill = header_fill
-        sheet['A1'].font = header_font
-        
-        row = 2
-        for item in duplicates:
-            sheet[f'A{row}'] = item
-            row += 1
-        
-        sheet.column_dimensions['A'].width = 60
-    
-    def create_comparison_sheet(self, wb, sheet_name, data, comparison_type):
-        """Create sheet showing comparison results"""
-        sheet = wb.create_sheet(sheet_name)
-        
-        if comparison_type == "both":
-            color = "00B050"
-            sheet['A1'] = "Coworker's Entry"
-            sheet['B1'] = "Your Entry"
-        elif comparison_type == "coworker":
-            color = "FFA500"
-            sheet['A1'] = "Entry (only in coworker's)"
-        else:  # you
-            color = "FF0000"
-            sheet['A1'] = "Entry (only in yours)"
-        
-        header_fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
-        header_font = Font(bold=True, color="FFFFFF")
-        
-        for cell in sheet[1]:
-            if cell.value:
-                cell.fill = header_fill
-                cell.font = header_font
-        
-        row = 2
-        for item in data:
-            if comparison_type == "both":
-                if isinstance(item, tuple):
-                    sheet[f'A{row}'] = item[0] if isinstance(item[0], str) else item[0][0] if isinstance(item[0], tuple) else str(item[0])
-                    sheet[f'B{row}'] = item[1]
-                else:
-                    sheet[f'A{row}'] = str(item)
-            else:
-                if isinstance(item, tuple):
-                    sheet[f'A{row}'] = item[0] if isinstance(item, str) else str(item)
-                else:
-                    sheet[f'A{row}'] = str(item)
-            row += 1
-        
-        sheet.column_dimensions['A'].width = 60
-        if comparison_type == "both":
-            sheet.column_dimensions['B'].width = 60
 
 
 def main():
     root = tk.Tk()
-    app = CoworkerComparisonGUI(root)
+    app = FastDataComparisonGUI(root)
     root.mainloop()
 
 
