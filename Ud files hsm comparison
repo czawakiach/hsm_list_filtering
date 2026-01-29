@@ -70,10 +70,9 @@ class UDFilesHSMComparisonGUI:
         info_text = tk.Text(info_frame, height=10, width=100, wrap=tk.WORD)
         info_text.grid(row=0, column=0)
         info_text.insert(tk.END, "Extraction:\n")
-        info_text.insert(tk.END, "  • HSM: Extracts filename after first '/' after date\n")
-        info_text.insert(tk.END, "    Example: '.au/Stra_loading_au.prn' → 'Stra_loading_au.prn'\n\n")
-        info_text.insert(tk.END, "  • ud_files: Extracts everything after time (HH:MM)\n")
-        info_text.insert(tk.END, "    Example: '2014-10-25 18:42 CNL94A-2D...' → 'CNL94A-2D...'\n\n")
+        info_text.insert(tk.END, "  • Both files: Extracts everything after the LAST '/'\n")
+        info_text.insert(tk.END, "    HSM example: '.au/folder/Stra_loading_au.prn' → 'Stra_loading_au.prn'\n")
+        info_text.insert(tk.END, "    ud_files example: 'path/to/CNL94A-2D.txt' → 'CNL94A-2D.txt'\n\n")
         info_text.insert(tk.END, "Matching:\n")
         info_text.insert(tk.END, "  • EXACT match only (case-insensitive, whitespace-ignored)\n")
         info_text.insert(tk.END, "  • Uses hash indexing for speed\n\n")
@@ -145,34 +144,23 @@ class UDFilesHSMComparisonGUI:
     def extract_filename_from_hsm(self, line):
         """
         Extract filename from HSM line.
-        Format: -rwxrwx-x. 1 lmkec g_agidat 374 Jun 22 2016 .au/Stra_loading_au.prn
-        Returns: Stra_loading_au.prn (everything after first '/' after the date)
+        Returns: Everything after the last '/'
+        Example: -rwxrwx-x. 1 lmkec g_agidat 374 Jun 22 2016 .au/Stra_loading_au.prn
+                 → Stra_loading_au.prn
         """
-        # Find the year (4 digits) which marks end of date
-        match = re.search(r'\b(19|20)\d{2}\b', line)
-        if match:
-            # Get everything after the year
-            after_year = line[match.end():].strip()
-            # Find first '/'
-            slash_idx = after_year.find('/')
-            if slash_idx != -1:
-                # Return everything after the '/'
-                return after_year[slash_idx + 1:].strip()
-        
+        if '/' in line:
+            return line.rsplit('/', 1)[-1].strip()
         return None
     
     def extract_filename_from_ud_files(self, line):
         """
         Extract filename from ud_files line.
-        Format: -rwxrwxr-x waris/user 1427811 2014-10-25 18:42 CNL94A-2Detc...
-        Returns: CNL94A-2Detc... (everything after the time HH:MM)
+        Returns: Everything after the last '/'
+        Example: -rwxrwxr-x waris/user 1427811 2014-10-25 18:42 CNL94A-2Detc/file.txt
+                 → file.txt
         """
-        # Find time pattern HH:MM
-        match = re.search(r'\b\d{1,2}:\d{2}\b', line)
-        if match:
-            # Return everything after the time
-            return line[match.end():].strip()
-        
+        if '/' in line:
+            return line.rsplit('/', 1)[-1].strip()
         return None
     
     def build_hash_index(self, entries, name):
