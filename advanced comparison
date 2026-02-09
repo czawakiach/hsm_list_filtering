@@ -67,8 +67,14 @@ class AdvancedUDFilesHSMComparisonGUI:
         self.extraction_var = tk.StringVar(value="filename_only")
         ttk.Radiobutton(self.single_extraction_frame, text="Filename only (after last /)", 
                        variable=self.extraction_var, value="filename_only").grid(row=0, column=0, padx=10, sticky=tk.W)
-        ttk.Radiobutton(self.single_extraction_frame, text="5 chars before / + filename", 
-                       variable=self.extraction_var, value="5_chars").grid(row=0, column=1, padx=10, sticky=tk.W)
+        ttk.Radiobutton(self.single_extraction_frame, text="N chars before / + filename", 
+                       variable=self.extraction_var, value="n_chars").grid(row=0, column=1, padx=10, sticky=tk.W)
+        
+        ttk.Label(self.single_extraction_frame, text="Chars:").grid(row=0, column=2, padx=(10,0))
+        self.single_chars_var = tk.StringVar(value="5")
+        chars_spinbox = ttk.Spinbox(self.single_extraction_frame, from_=1, to=10, width=5, 
+                                     textvariable=self.single_chars_var)
+        chars_spinbox.grid(row=0, column=3, padx=(0,10))
         
         # Dual mode extraction
         self.dual_extraction_frame = ttk.Frame(extraction_frame)
@@ -77,15 +83,23 @@ class AdvancedUDFilesHSMComparisonGUI:
         self.scenario1_var = tk.StringVar(value="filename_only")
         ttk.Radiobutton(self.dual_extraction_frame, text="Filename only", 
                        variable=self.scenario1_var, value="filename_only").grid(row=0, column=1, padx=10)
-        ttk.Radiobutton(self.dual_extraction_frame, text="5 chars + filename", 
-                       variable=self.scenario1_var, value="5_chars").grid(row=0, column=2, padx=10)
+        ttk.Radiobutton(self.dual_extraction_frame, text="N chars + filename", 
+                       variable=self.scenario1_var, value="n_chars").grid(row=0, column=2, padx=10)
+        ttk.Label(self.dual_extraction_frame, text="Chars:").grid(row=0, column=3, padx=(10,0))
+        self.scenario1_chars_var = tk.StringVar(value="5")
+        ttk.Spinbox(self.dual_extraction_frame, from_=1, to=10, width=5, 
+                   textvariable=self.scenario1_chars_var).grid(row=0, column=4, padx=(0,10))
         
         ttk.Label(self.dual_extraction_frame, text="Scenario 2:", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.scenario2_var = tk.StringVar(value="5_chars")
+        self.scenario2_var = tk.StringVar(value="n_chars")
         ttk.Radiobutton(self.dual_extraction_frame, text="Filename only", 
                        variable=self.scenario2_var, value="filename_only").grid(row=1, column=1, padx=10)
-        ttk.Radiobutton(self.dual_extraction_frame, text="5 chars + filename", 
-                       variable=self.scenario2_var, value="5_chars").grid(row=1, column=2, padx=10)
+        ttk.Radiobutton(self.dual_extraction_frame, text="N chars + filename", 
+                       variable=self.scenario2_var, value="n_chars").grid(row=1, column=2, padx=10)
+        ttk.Label(self.dual_extraction_frame, text="Chars:").grid(row=1, column=3, padx=(10,0))
+        self.scenario2_chars_var = tk.StringVar(value="5")
+        ttk.Spinbox(self.dual_extraction_frame, from_=1, to=10, width=5, 
+                   textvariable=self.scenario2_chars_var).grid(row=1, column=4, padx=(0,10))
         
         # File selection
         ttk.Label(main_frame, text="ud_files.lst:").grid(row=4, column=0, sticky=tk.W, pady=5)
@@ -107,7 +121,7 @@ class AdvancedUDFilesHSMComparisonGUI:
         info_text.insert(tk.END, "Single Mode: Compare with one extraction method\n")
         info_text.insert(tk.END, "Dual Mode: Run TWO comparisons, get results for both + difference report\n\n")
         info_text.insert(tk.END, "  • Filename only: 'path/to/file.txt' → 'file.txt'\n")
-        info_text.insert(tk.END, "  • 5 chars: 'path/to/file.txt' → 'o/to/file.txt'\n\n")
+        info_text.insert(tk.END, "  • N chars: 'path/to/file.txt' → 'o/to/file.txt' (if N=2)\n\n")
         info_text.insert(tk.END, "Filters: drwx excluded, bg-ingest separated\n")
         info_text.insert(tk.END, "Match: EXACT (case-insensitive, whitespace-ignored)")
         info_text.config(state=tk.DISABLED)
@@ -179,16 +193,16 @@ class AdvancedUDFilesHSMComparisonGUI:
     def normalize_string(self, s):
         return ''.join(s.upper().split())
     
-    def extract_filename(self, line, method):
+    def extract_filename(self, line, method, n_chars=5):
         if '/' not in line:
             return None
         
         if method == 'filename_only':
             return line.rsplit('/', 1)[-1].strip()
-        elif method == '5_chars':
+        elif method == 'n_chars':
             before_slash, after_slash = line.rsplit('/', 1)
-            last_5_chars = before_slash[-5:] if len(before_slash) >= 5 else before_slash
-            return f"{last_5_chars}/{after_slash.strip()}"
+            last_n_chars = before_slash[-n_chars:] if len(before_slash) >= n_chars else before_slash
+            return f"{last_n_chars}/{after_slash.strip()}"
         return None
     
     def build_hash_index(self, entries, name):
@@ -220,16 +234,17 @@ class AdvancedUDFilesHSMComparisonGUI:
     
     def compare_single_scenario(self):
         extraction_method = self.extraction_var.get()
-        method_name = "Filename only" if extraction_method == "filename_only" else "5 chars + filename"
+        n_chars = int(self.single_chars_var.get()) if extraction_method == 'n_chars' else 5
+        method_name = "Filename only" if extraction_method == "filename_only" else f"{n_chars} chars + filename"
         
         self.log("="*70)
         self.log("SINGLE SCENARIO COMPARISON")
         self.log(f"Method: {method_name}")
         self.log("="*70)
         
-        results = self.run_comparison_scenario(extraction_method, "")
+        results = self.run_comparison_scenario(extraction_method, "", n_chars)
         
-        output_file = self.create_single_excel(results, extraction_method)
+        output_file = self.create_single_excel(results, extraction_method, n_chars)
         
         match_rate = (len(results['matches']) / results['ud_total'] * 100) if results['ud_total'] > 0 else 0
         
@@ -252,8 +267,10 @@ class AdvancedUDFilesHSMComparisonGUI:
     def compare_dual_scenarios(self):
         method1 = self.scenario1_var.get()
         method2 = self.scenario2_var.get()
-        name1 = "Filename only" if method1 == "filename_only" else "5 chars + filename"
-        name2 = "Filename only" if method2 == "filename_only" else "5 chars + filename"
+        n_chars1 = int(self.scenario1_chars_var.get()) if method1 == 'n_chars' else 5
+        n_chars2 = int(self.scenario2_chars_var.get()) if method2 == 'n_chars' else 5
+        name1 = "Filename only" if method1 == "filename_only" else f"{n_chars1} chars + filename"
+        name2 = "Filename only" if method2 == "filename_only" else f"{n_chars2} chars + filename"
         
         self.log("="*70)
         self.log("DUAL SCENARIO COMPARISON")
@@ -264,19 +281,19 @@ class AdvancedUDFilesHSMComparisonGUI:
         self.log("\n" + "="*70)
         self.log("RUNNING SCENARIO 1")
         self.log("="*70)
-        results1 = self.run_comparison_scenario(method1, "Scenario 1")
+        results1 = self.run_comparison_scenario(method1, "Scenario 1", n_chars1)
         
         self.log("\n" + "="*70)
         self.log("RUNNING SCENARIO 2")
         self.log("="*70)
-        results2 = self.run_comparison_scenario(method2, "Scenario 2")
+        results2 = self.run_comparison_scenario(method2, "Scenario 2", n_chars2)
         
         self.log("\n" + "="*70)
         self.log("CALCULATING DIFFERENCES")
         self.log("="*70)
         differences = self.calculate_differences(results1, results2)
         
-        output_file = self.create_dual_excel(results1, results2, differences, method1, method2)
+        output_file = self.create_dual_excel(results1, results2, differences, method1, method2, n_chars1, n_chars2)
         
         match_rate1 = (len(results1['matches']) / results1['ud_total'] * 100) if results1['ud_total'] > 0 else 0
         match_rate2 = (len(results2['matches']) / results2['ud_total'] * 100) if results2['ud_total'] > 0 else 0
@@ -302,7 +319,91 @@ class AdvancedUDFilesHSMComparisonGUI:
             f"Only in S2: {len(differences['only_in_2']):,}\n\n"
             f"Report saved!")
     
-    def run_comparison_scenario(self, extraction_method, label):
+    def run_comparison_scenario(self, extraction_method, label, n_chars=5):
+        # Load HSM
+        self.log(f"Loading HSM file...")
+        hsm_entries = []
+        with open(self.hsm_file_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line:
+                    filename = self.extract_filename(line, extraction_method, n_chars)
+                    if filename:
+                        normalized = self.normalize_string(filename)
+                        hsm_entries.append((line, filename, normalized))
+                if line_num % 100000 == 0:
+                    self.log(f"  HSM: {line_num:,} lines...")
+        
+        self.log(f"✓ HSM: {len(hsm_entries):,} entries")
+        
+        # Load ud_files
+        self.log(f"Loading ud_files.lst...")
+        ud_entries = []
+        drwx_entries = []
+        with open(self.ud_files_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line:
+                    if line.startswith('drwx'):
+                        drwx_entries.append(line)
+                        continue
+                    filename = self.extract_filename(line, extraction_method, n_chars)
+                    if filename:
+                        normalized = self.normalize_string(filename)
+                        ud_entries.append((line, filename, normalized))
+                if line_num % 100000 == 0:
+                    self.log(f"  ud_files: {line_num:,} lines...")
+        
+        self.log(f"✓ ud_files: {len(ud_entries):,} entries")
+        if drwx_entries:
+            self.log(f"  Excluded {len(drwx_entries):,} drwx entries")
+        
+        # Build HSM index
+        hsm_index = self.build_hash_index(hsm_entries, "HSM")
+        
+        # Compare
+        self.log("Comparing...")
+        matches = []
+        bg_ingest_matches = []
+        unique = []
+        
+        for idx, (ud_line, ud_filename, ud_normalized) in enumerate(ud_entries, 1):
+            if ud_normalized in hsm_index:
+                hsm_line, hsm_filename = hsm_index[ud_normalized]
+                match_data = {
+                    'ud_filename': ud_filename,
+                    'ud_line': ud_line,
+                    'hsm_filename': hsm_filename,
+                    'hsm_line': hsm_line,
+                    'normalized': ud_normalized,
+                    'ud_original': ud_line,  # Store original for dual comparison
+                    'hsm_original': hsm_line  # Store original for dual comparison
+                }
+                
+                if 'bg-ingest' in ud_line.lower():
+                    bg_ingest_matches.append(match_data)
+                else:
+                    matches.append(match_data)
+            else:
+                unique.append({
+                    'filename': ud_filename,
+                    'ud_line': ud_line,
+                    'normalized': ud_normalized
+                })
+            
+            if idx % 50000 == 0:
+                self.log(f"  Processed {idx:,}/{len(ud_entries):,}...")
+        
+        self.log(f"✓ Matches: {len(matches):,} | bg-ingest: {len(bg_ingest_matches):,} | Unique: {len(unique):,}")
+        
+        return {
+            'matches': matches,
+            'bg_ingest_matches': bg_ingest_matches,
+            'unique': unique,
+            'drwx_entries': drwx_entries,
+            'ud_total': len(ud_entries),
+            'hsm_total': len(hsm_entries)
+        }
         # Load HSM
         self.log(f"Loading HSM file...")
         hsm_entries = []
@@ -387,18 +488,20 @@ class AdvancedUDFilesHSMComparisonGUI:
         }
     
     def calculate_differences(self, results1, results2):
-        # Get normalized matched entries from each scenario
-        matched_norm_1 = set(m['normalized'] for m in results1['matches'])
-        matched_norm_2 = set(m['normalized'] for m in results2['matches'])
+        # Create dict mapping original ud_line to match data for each scenario
+        # Using original ud_line as key since that's what we want to compare
+        matches1_by_ud = {self.normalize_string(m['ud_original']): m for m in results1['matches']}
+        matches2_by_ud = {self.normalize_string(m['ud_original']): m for m in results2['matches']}
         
-        only_in_1_norm = matched_norm_1 - matched_norm_2
-        only_in_2_norm = matched_norm_2 - matched_norm_1
-        in_both_norm = matched_norm_1 & matched_norm_2
+        # Find differences based on original ud_files lines
+        only_in_1_keys = set(matches1_by_ud.keys()) - set(matches2_by_ud.keys())
+        only_in_2_keys = set(matches2_by_ud.keys()) - set(matches1_by_ud.keys())
+        in_both_keys = set(matches1_by_ud.keys()) & set(matches2_by_ud.keys())
         
         # Get full data for differences
-        only_in_1 = [m for m in results1['matches'] if m['normalized'] in only_in_1_norm]
-        only_in_2 = [m for m in results2['matches'] if m['normalized'] in only_in_2_norm]
-        in_both = [m for m in results1['matches'] if m['normalized'] in in_both_norm]
+        only_in_1 = [matches1_by_ud[k] for k in only_in_1_keys]
+        only_in_2 = [matches2_by_ud[k] for k in only_in_2_keys]
+        in_both = [matches1_by_ud[k] for k in in_both_keys]
         
         self.log(f"  Only in Scenario 1: {len(only_in_1):,}")
         self.log(f"  Only in Scenario 2: {len(only_in_2):,}")
@@ -410,7 +513,7 @@ class AdvancedUDFilesHSMComparisonGUI:
             'in_both': in_both
         }
     
-    def create_single_excel(self, results, method):
+    def create_single_excel(self, results, method, n_chars=5):
         wb = Workbook()
         if 'Sheet' in wb.sheetnames:
             wb.remove(wb['Sheet'])
@@ -425,7 +528,7 @@ class AdvancedUDFilesHSMComparisonGUI:
         h_gray = PatternFill(start_color="808080", end_color="808080", fill_type="solid")
         h_font = Font(bold=True, color="FFFFFF")
         
-        method_name = "Filename only" if method == "filename_only" else "5 chars + filename"
+        method_name = "Filename only" if method == "filename_only" else f"{n_chars} chars + filename"
         
         # SUMMARY
         s = wb.create_sheet("SUMMARY", 0)
@@ -487,7 +590,7 @@ class AdvancedUDFilesHSMComparisonGUI:
         s.column_dimensions['A'].width = 50; s.column_dimensions['B'].width = 50
         s.column_dimensions['C'].width = 80; s.column_dimensions['D'].width = 80
     
-    def create_dual_excel(self, r1, r2, diff, method1, method2):
+    def create_dual_excel(self, r1, r2, diff, method1, method2, n_chars1=5, n_chars2=5):
         wb = Workbook()
         if 'Sheet' in wb.sheetnames:
             wb.remove(wb['Sheet'])
@@ -502,8 +605,8 @@ class AdvancedUDFilesHSMComparisonGUI:
         h_gray = PatternFill(start_color="808080", end_color="808080", fill_type="solid")
         h_font = Font(bold=True, color="FFFFFF")
         
-        name1 = "Filename only" if method1 == "filename_only" else "5 chars + filename"
-        name2 = "Filename only" if method2 == "filename_only" else "5 chars + filename"
+        name1 = "Filename only" if method1 == "filename_only" else f"{n_chars1} chars + filename"
+        name2 = "Filename only" if method2 == "filename_only" else f"{n_chars2} chars + filename"
         
         # SUMMARY
         s = wb.create_sheet("SUMMARY", 0)
