@@ -1,0 +1,670 @@
+#!/usr/bin/env python3
+"""
+UD Files HSM Comparison Tool
+Compares ud_files.lst with HSM list using exact filename matching.
+Optimized with hash-based indexing for fast processing.
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+import re
+from collections import defaultdict
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+except ImportError:
+    print("Installing openpyxl...")
+    import subprocess
+    subprocess.check_call(['pip', 'install', 'openpyxl', '--break-system-packages'])
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+
+class UDFilesHSMComparisonGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("UD Files HSM Comparison Tool")
+        self.root.geometry("900x650")
+        
+        self.ud_files_path = None
+        self.hsm_file_path = None
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="UD Files HSM Comparison Tool (Simple)", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        subtitle_label = ttk.Label(main_frame, 
+                                   text="⚡ Fast exact matching - filename only", 
+                                   font=('Arial', 10, 'italic'), foreground='blue')
+        subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+        
+        # ud_files.lst selection
+        ttk.Label(main_frame, text="ud_files.lst:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.ud_files_label = ttk.Label(main_frame, text="No file selected", 
+                                        foreground="gray", wraplength=500)
+        self.ud_files_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_ud_files).grid(row=2, column=2, padx=5)
+        
+        # HSM file selection
+        ttk.Label(main_frame, text="HSM list file:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.hsm_label = ttk.Label(main_frame, text="No file selected", 
+                                   foreground="gray", wraplength=500)
+        self.hsm_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_hsm_file).grid(row=3, column=2, padx=5)
+        
+        # Info box
+        info_frame = ttk.LabelFrame(main_frame, text="What this does", padding="10")
+        info_frame.grid(row=4, column=0, columnspan=3, pady=20, sticky=(tk.W, tk.E))
+        
+        info_text = tk.Text(info_frame, height=10, width=100, wrap=tk.WORD)
+        info_text.grid(row=0, column=0)
+        info_text.insert(tk.END, "Extraction:\n")
+        info_text.insert(tk.END, "  • Both files: Extracts filename after LAST '/'\n")
+        info_text.insert(tk.END, "    HSM: '.au/some/folder/file.prn' → 'file.prn'\n")
+        info_text.insert(tk.END, "    ud_files: 'path/to/data/file.prn' → 'file.prn'\n\n")
+        info_text.insert(tk.END, "Filtering:\n")
+        info_text.insert(tk.END, "  • Skips lines starting with 'drwx' (directories)\n")
+        info_text.insert(tk.END, "  • Separates 'bg-ingest' matches into own sheet\n\n")
+        info_text.insert(tk.END, "Matching:\n")
+        info_text.insert(tk.END, "  • EXACT match only (case-insensitive, whitespace-ignored)\n\n")
+        info_text.insert(tk.END, "Output: Excel with summary, matches, bg-ingest, drwx, and unique entries")
+        info_text.config(state=tk.DISABLED)
+        
+        # Compare button
+        self.compare_button = ttk.Button(main_frame, text="Compare Files", 
+                                        command=self.start_comparison, state=tk.DISABLED)
+        self.compare_button.grid(row=5, column=0, columnspan=3, pady=20)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=600)
+        self.progress.grid(row=6, column=0, columnspan=3, pady=5)
+        
+        # Status text area
+        ttk.Label(main_frame, text="Processing Status:").grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=15, width=100, wrap=tk.WORD)
+        self.status_text.grid(row=8, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(8, weight=1)
+    
+    def select_ud_files(self):
+        filepath = filedialog.askopenfilename(
+            title="Select ud_files.lst file",
+            filetypes=[("List files", "*.lst"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.ud_files_path = filepath
+            self.ud_files_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def select_hsm_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select HSM list file",
+            filetypes=[("List files", "*.lst"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.hsm_file_path = filepath
+            self.hsm_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def check_ready(self):
+        if self.ud_files_path and self.hsm_file_path:
+            self.compare_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_comparison(self):
+        self.compare_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        
+        # Run comparison in separate thread
+        thread = threading.Thread(target=self.compare_files)
+        thread.start()
+    
+    def normalize_string(self, s):
+        """Normalize string: uppercase and remove all whitespace"""
+        return ''.join(s.upper().split())
+    
+    def extract_filename_from_hsm(self, line):
+        """
+        Extract filename from HSM line.
+        Returns: Everything after the last '/'
+        Example: .au/some/folder/file.prn → file.prn
+        """
+        if '/' in line:
+            return line.rsplit('/', 1)[-1].strip()
+        return None
+    
+    def extract_filename_from_ud_files(self, line):
+        """
+        Extract filename from ud_files line.
+        Returns: Everything after the last '/'
+        Example: path/to/data/file.prn → file.prn
+        """
+        if '/' in line:
+            return line.rsplit('/', 1)[-1].strip()
+        return None
+    
+    def build_hash_index(self, entries, name):
+        """
+        Build hash index for fast exact matching.
+        
+        Args:
+            entries: List of (original_line, filename, normalized_filename) tuples
+            name: Name for logging
+        
+        Returns:
+            Dictionary mapping normalized_filename to (original_line, filename)
+        """
+        self.log(f"Building hash index for {name}...")
+        
+        hash_index = {}
+        
+        for orig_line, filename, norm_filename in entries:
+            # For exact matching, we just need a simple dict lookup
+            if norm_filename not in hash_index:
+                hash_index[norm_filename] = (orig_line, filename)
+        
+        self.log(f"✓ Index complete: {len(hash_index):,} unique filenames\n")
+        
+        return hash_index
+    
+    def compare_files(self):
+        try:
+            self.log("="*70)
+            self.log("STARTING UD FILES HSM COMPARISON")
+            self.log("="*70)
+            
+            # Step 1: Load and process HSM file
+            self.log("\n" + "="*70)
+            self.log("STEP 1: Loading HSM file")
+            self.log("="*70)
+            
+            hsm_entries = []
+            hsm_skipped = 0
+            
+            with open(self.hsm_file_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if line:
+                        filename = self.extract_filename_from_hsm(line)
+                        if filename:
+                            normalized = self.normalize_string(filename)
+                            hsm_entries.append((line, filename, normalized))
+                        else:
+                            hsm_skipped += 1
+                    
+                    if line_num % 100000 == 0:
+                        self.log(f"  Processed {line_num:,} lines...")
+            
+            self.log(f"✓ HSM file loaded: {len(hsm_entries):,} entries")
+            if hsm_skipped > 0:
+                self.log(f"  Skipped {hsm_skipped:,} lines (couldn't extract filename)")
+            
+            # Step 2: Load and process ud_files
+            self.log("\n" + "="*70)
+            self.log("STEP 2: Loading ud_files.lst")
+            self.log("="*70)
+            
+            ud_entries = []
+            ud_skipped = 0
+            drwx_entries = []  # Collect drwx entries for reporting
+            
+            with open(self.ud_files_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if line:
+                        # Skip lines starting with "drwx" (directories)
+                        if line.startswith('drwx'):
+                            drwx_entries.append(line)
+                            continue
+                        
+                        filename = self.extract_filename_from_ud_files(line)
+                        if filename:
+                            normalized = self.normalize_string(filename)
+                            ud_entries.append((line, filename, normalized))
+                        else:
+                            ud_skipped += 1
+                    
+                    if line_num % 100000 == 0:
+                        self.log(f"  Processed {line_num:,} lines...")
+            
+            self.log(f"✓ ud_files loaded: {len(ud_entries):,} entries")
+            if drwx_entries:
+                self.log(f"  Excluded {len(drwx_entries):,} directory entries (drwx)")
+            if ud_skipped > 0:
+                self.log(f"  Skipped {ud_skipped:,} lines (couldn't extract filename)")
+            
+            # Step 3: Build hash index for HSM
+            self.log("\n" + "="*70)
+            self.log("STEP 3: Building hash index for HSM")
+            self.log("="*70)
+            
+            hsm_index = self.build_hash_index(hsm_entries, "HSM")
+            
+            # Step 4: Compare ud_files against HSM
+            self.log("="*70)
+            self.log("STEP 4: Comparing ud_files with HSM")
+            self.log("="*70)
+            
+            matches = []
+            bg_ingest_matches = []
+            unique = []
+            
+            for idx, (ud_line, ud_filename, ud_normalized) in enumerate(ud_entries, 1):
+                if ud_normalized in hsm_index:
+                    # Found match
+                    hsm_line, hsm_filename = hsm_index[ud_normalized]
+                    
+                    # Check if ud_line contains "bg-ingest"
+                    if 'bg-ingest' in ud_line.lower():
+                        # Separate bg-ingest matches
+                        bg_ingest_matches.append({
+                            'ud_filename': ud_filename,
+                            'ud_line': ud_line,
+                            'hsm_filename': hsm_filename,
+                            'hsm_line': hsm_line
+                        })
+                    else:
+                        # Regular match
+                        matches.append({
+                            'ud_filename': ud_filename,
+                            'ud_line': ud_line,
+                            'hsm_filename': hsm_filename,
+                            'hsm_line': hsm_line
+                        })
+                else:
+                    # Not found in HSM
+                    unique.append({
+                        'filename': ud_filename,
+                        'ud_line': ud_line
+                    })
+                
+                if idx % 50000 == 0:
+                    self.log(f"  Processed {idx:,}/{len(ud_entries):,} entries...")
+            
+            self.log(f"✓ Comparison complete")
+            if bg_ingest_matches:
+                self.log(f"  Found {len(bg_ingest_matches):,} bg-ingest matches (separated)")
+            
+            # Step 5: Create Excel report
+            self.log("\n" + "="*70)
+            self.log("STEP 5: Creating Excel report")
+            self.log("="*70)
+            
+            output_file = self.create_excel_report(matches, unique, bg_ingest_matches, drwx_entries, len(ud_entries), len(hsm_entries))
+            
+            # Summary
+            match_rate = (len(matches) / len(ud_entries) * 100) if ud_entries else 0
+            bg_ingest_rate = (len(bg_ingest_matches) / len(ud_entries) * 100) if ud_entries else 0
+            
+            self.log(f"\n{'='*70}")
+            self.log("SUMMARY")
+            self.log(f"{'='*70}")
+            self.log(f"\nud_files entries: {len(ud_entries):,}")
+            self.log(f"HSM entries: {len(hsm_entries):,}")
+            self.log(f"Excluded (drwx): {len(drwx_entries):,}")
+            self.log(f"\nComparison Results:")
+            self.log(f"  ✓ Found in HSM: {len(matches):,} ({match_rate:.1f}%)")
+            self.log(f"  ⚠ bg-ingest matches: {len(bg_ingest_matches):,} ({bg_ingest_rate:.1f}%)")
+            self.log(f"  ✗ Not in HSM: {len(unique):,}")
+            
+            self.log(f"\n{'='*70}")
+            self.log("COMPARISON COMPLETE!")
+            self.log(f"{'='*70}")
+            self.log(f"\nReport saved to: {os.path.basename(output_file)}")
+            
+            messagebox.showinfo("Success", 
+                f"Comparison complete!\n\n"
+                f"ud_files entries: {len(ud_entries):,}\n"
+                f"Excluded (drwx): {len(drwx_entries):,}\n"
+                f"Found in HSM: {len(matches):,} ({match_rate:.1f}%)\n"
+                f"bg-ingest matches: {len(bg_ingest_matches):,}\n"
+                f"Not in HSM: {len(unique):,}\n\n"
+                f"Report saved to:\n{output_file}")
+            
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        
+        finally:
+            self.progress.stop()
+            self.compare_button.config(state=tk.NORMAL)
+    
+    def create_excel_report(self, matches, unique, bg_ingest_matches, drwx_entries, ud_total, hsm_total):
+        """Create Excel report with results"""
+        
+        wb = Workbook()
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        # Header styling
+        header_fill_blue = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_fill_green = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        header_fill_orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        header_fill_red = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+        header_fill_gray = PatternFill(start_color="808080", end_color="808080", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        # ==================== SHEET 1: SUMMARY ====================
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
+        
+        summary_sheet['A1'] = "UD FILES HSM COMPARISON SUMMARY"
+        summary_sheet['A1'].font = Font(bold=True, size=16)
+        summary_sheet.merge_cells('A1:C1')
+        
+        row = 3
+        summary_sheet[f'A{row}'] = "Total Entries:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
+        summary_sheet[f'A{row}'] = "ud_files entries:"
+        summary_sheet[f'B{row}'] = ud_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
+        summary_sheet[f'A{row}'] = "HSM entries:"
+        summary_sheet[f'B{row}'] = hsm_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
+        summary_sheet[f'A{row}'] = "Excluded (drwx):"
+        summary_sheet[f'B{row}'] = len(drwx_entries)
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 3
+        
+        summary_sheet[f'A{row}'] = "Comparison Results:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "Found in HSM:"
+        summary_sheet[f'B{row}'] = len(matches)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        match_rate = (len(matches) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{match_rate:.1f}%"
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "bg-ingest matches:"
+        summary_sheet[f'B{row}'] = len(bg_ingest_matches)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        bg_ingest_rate = (len(bg_ingest_matches) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{bg_ingest_rate:.1f}%"
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "Not in HSM:"
+        summary_sheet[f'B{row}'] = len(unique)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        unique_rate = (len(unique) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{unique_rate:.1f}%"
+        
+        summary_sheet.column_dimensions['A'].width = 25
+        summary_sheet.column_dimensions['B'].width = 15
+        summary_sheet.column_dimensions['C'].width = 10
+        
+        self.log("  Created SUMMARY sheet")
+        
+        # ==================== SHEET 2: MATCHES ====================
+        matches_sheet = wb.create_sheet("FOUND IN HSM", 1)
+        
+        headers = ["ud_files Extracted", "HSM Extracted", "ud_files Full Line", "HSM Full Line"]
+        for col, header in enumerate(headers, 1):
+            cell = matches_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_green
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(matches, 2):
+            matches_sheet.cell(row=row_idx, column=1, value=item['ud_filename'])
+            matches_sheet.cell(row=row_idx, column=2, value=item['hsm_filename'])
+            matches_sheet.cell(row=row_idx, column=3, value=item['ud_line'])
+            matches_sheet.cell(row=row_idx, column=4, value=item['hsm_line'])
+        
+        matches_sheet.column_dimensions['A'].width = 50
+        matches_sheet.column_dimensions['B'].width = 50
+        matches_sheet.column_dimensions['C'].width = 80
+        matches_sheet.column_dimensions['D'].width = 80
+        
+        self.log(f"  Created FOUND IN HSM sheet ({len(matches):,} entries)")
+        
+        current_sheet_idx = 2
+        
+        # ==================== SHEET 3: BG-INGEST MATCHES ====================
+        if bg_ingest_matches:
+            bg_ingest_sheet = wb.create_sheet("BG-INGEST MATCHES", current_sheet_idx)
+            
+            headers = ["ud_files Extracted", "HSM Extracted", "ud_files Full Line", "HSM Full Line"]
+            for col, header in enumerate(headers, 1):
+                cell = bg_ingest_sheet.cell(row=1, column=col, value=header)
+                cell.fill = header_fill_orange
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+            
+            for row_idx, item in enumerate(bg_ingest_matches, 2):
+                bg_ingest_sheet.cell(row=row_idx, column=1, value=item['ud_filename'])
+                bg_ingest_sheet.cell(row=row_idx, column=2, value=item['hsm_filename'])
+                bg_ingest_sheet.cell(row=row_idx, column=3, value=item['ud_line'])
+                bg_ingest_sheet.cell(row=row_idx, column=4, value=item['hsm_line'])
+            
+            bg_ingest_sheet.column_dimensions['A'].width = 50
+            bg_ingest_sheet.column_dimensions['B'].width = 50
+            bg_ingest_sheet.column_dimensions['C'].width = 80
+            bg_ingest_sheet.column_dimensions['D'].width = 80
+            
+            self.log(f"  Created BG-INGEST MATCHES sheet ({len(bg_ingest_matches):,} entries)")
+            current_sheet_idx += 1
+        
+        # ==================== SHEET 4: UNIQUE ====================
+        unique_sheet = wb.create_sheet("NOT IN HSM", current_sheet_idx)
+        
+        headers = ["Extracted", "ud_files Full Line"]
+        for col, header in enumerate(headers, 1):
+            cell = unique_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_red
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(unique, 2):
+            unique_sheet.cell(row=row_idx, column=1, value=item['filename'])
+            unique_sheet.cell(row=row_idx, column=2, value=item['ud_line'])
+        
+        unique_sheet.column_dimensions['A'].width = 50
+        unique_sheet.column_dimensions['B'].width = 80
+        
+        self.log(f"  Created NOT IN HSM sheet ({len(unique):,} entries)")
+        current_sheet_idx += 1
+        
+        # ==================== SHEET 5: EXCLUDED DRWX ====================
+        if drwx_entries:
+            drwx_sheet = wb.create_sheet("EXCLUDED DRWX", current_sheet_idx)
+            
+            headers = ["Full Line (Directory Entry)"]
+            cell = drwx_sheet.cell(row=1, column=1, value=headers[0])
+            cell.fill = header_fill_gray
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+            
+            for row_idx, line in enumerate(drwx_entries, 2):
+                drwx_sheet.cell(row=row_idx, column=1, value=line)
+            
+            drwx_sheet.column_dimensions['A'].width = 100
+            
+            self.log(f"  Created EXCLUDED DRWX sheet ({len(drwx_entries):,} entries)")
+        
+        # Save
+        directory = os.path.dirname(self.ud_files_path)
+        output_file = os.path.join(directory, "UD_Files_HSM_Comparison_Simple.xlsx")
+        wb.save(output_file)
+        
+        return output_file
+        """Create Excel report with results"""
+        
+        wb = Workbook()
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        # Header styling
+        header_fill_blue = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_fill_green = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        header_fill_orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        header_fill_red = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        # ==================== SHEET 1: SUMMARY ====================
+        summary_sheet = wb.create_sheet("SUMMARY", 0)
+        
+        summary_sheet['A1'] = "UD FILES HSM COMPARISON SUMMARY"
+        summary_sheet['A1'].font = Font(bold=True, size=16)
+        summary_sheet.merge_cells('A1:C1')
+        
+        row = 3
+        summary_sheet[f'A{row}'] = "Total Entries:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
+        summary_sheet[f'A{row}'] = "ud_files entries:"
+        summary_sheet[f'B{row}'] = ud_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 1
+        summary_sheet[f'A{row}'] = "HSM entries:"
+        summary_sheet[f'B{row}'] = hsm_total
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        row += 3
+        
+        summary_sheet[f'A{row}'] = "Comparison Results:"
+        summary_sheet[f'A{row}'].font = Font(bold=True, size=12)
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "Found in HSM:"
+        summary_sheet[f'B{row}'] = len(matches)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        match_rate = (len(matches) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{match_rate:.1f}%"
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "bg-ingest matches:"
+        summary_sheet[f'B{row}'] = len(bg_ingest_matches)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        bg_ingest_rate = (len(bg_ingest_matches) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{bg_ingest_rate:.1f}%"
+        row += 1
+        
+        summary_sheet[f'A{row}'] = "Not in HSM:"
+        summary_sheet[f'B{row}'] = len(unique)
+        summary_sheet[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        summary_sheet[f'B{row}'].number_format = '#,##0'
+        unique_rate = (len(unique) / ud_total * 100) if ud_total > 0 else 0
+        summary_sheet[f'C{row}'] = f"{unique_rate:.1f}%"
+        
+        summary_sheet.column_dimensions['A'].width = 25
+        summary_sheet.column_dimensions['B'].width = 15
+        summary_sheet.column_dimensions['C'].width = 10
+        
+        self.log("  Created SUMMARY sheet")
+        
+        # ==================== SHEET 2: MATCHES ====================
+        matches_sheet = wb.create_sheet("FOUND IN HSM", 1)
+        
+        headers = ["ud_files Extracted", "HSM Extracted", "ud_files Full Line", "HSM Full Line"]
+        for col, header in enumerate(headers, 1):
+            cell = matches_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_green
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(matches, 2):
+            matches_sheet.cell(row=row_idx, column=1, value=item['ud_filename'])
+            matches_sheet.cell(row=row_idx, column=2, value=item['hsm_filename'])
+            matches_sheet.cell(row=row_idx, column=3, value=item['ud_line'])
+            matches_sheet.cell(row=row_idx, column=4, value=item['hsm_line'])
+        
+        matches_sheet.column_dimensions['A'].width = 50
+        matches_sheet.column_dimensions['B'].width = 50
+        matches_sheet.column_dimensions['C'].width = 80
+        matches_sheet.column_dimensions['D'].width = 80
+        
+        self.log(f"  Created FOUND IN HSM sheet ({len(matches):,} entries)")
+        
+        # ==================== SHEET 3: BG-INGEST MATCHES ====================
+        if bg_ingest_matches:
+            bg_ingest_sheet = wb.create_sheet("BG-INGEST MATCHES", 2)
+            
+            headers = ["ud_files Extracted", "HSM Extracted", "ud_files Full Line", "HSM Full Line"]
+            for col, header in enumerate(headers, 1):
+                cell = bg_ingest_sheet.cell(row=1, column=col, value=header)
+                cell.fill = header_fill_orange
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+            
+            for row_idx, item in enumerate(bg_ingest_matches, 2):
+                bg_ingest_sheet.cell(row=row_idx, column=1, value=item['ud_filename'])
+                bg_ingest_sheet.cell(row=row_idx, column=2, value=item['hsm_filename'])
+                bg_ingest_sheet.cell(row=row_idx, column=3, value=item['ud_line'])
+                bg_ingest_sheet.cell(row=row_idx, column=4, value=item['hsm_line'])
+            
+            bg_ingest_sheet.column_dimensions['A'].width = 50
+            bg_ingest_sheet.column_dimensions['B'].width = 50
+            bg_ingest_sheet.column_dimensions['C'].width = 80
+            bg_ingest_sheet.column_dimensions['D'].width = 80
+            
+            self.log(f"  Created BG-INGEST MATCHES sheet ({len(bg_ingest_matches):,} entries)")
+            
+            next_sheet_idx = 3
+        else:
+            next_sheet_idx = 2
+        
+        # ==================== SHEET 4: UNIQUE ====================
+        unique_sheet = wb.create_sheet("NOT IN HSM", next_sheet_idx)
+        
+        headers = ["Extracted", "ud_files Full Line"]
+        for col, header in enumerate(headers, 1):
+            cell = unique_sheet.cell(row=1, column=col, value=header)
+            cell.fill = header_fill_red
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row_idx, item in enumerate(unique, 2):
+            unique_sheet.cell(row=row_idx, column=1, value=item['filename'])
+            unique_sheet.cell(row=row_idx, column=2, value=item['ud_line'])
+        
+        unique_sheet.column_dimensions['A'].width = 50
+        unique_sheet.column_dimensions['B'].width = 80
+        
+        self.log(f"  Created NOT IN HSM sheet ({len(unique):,} entries)")
+        
+        # Save
+        directory = os.path.dirname(self.ud_files_path)
+        output_file = os.path.join(directory, "UD_Files_HSM_Comparison.xlsx")
+        wb.save(output_file)
+        
+        return output_file
+
+
+def main():
+    root = tk.Tk()
+    app = UDFilesHSMComparisonGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
