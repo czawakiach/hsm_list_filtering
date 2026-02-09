@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+"""
+UD Files HSM Comparison Tool (Advanced)
+Single or dual-scenario comparison with configurable extraction methods.
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import threading
+import os
+from collections import defaultdict
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+except ImportError:
+    print("Installing openpyxl...")
+    import subprocess
+    subprocess.check_call(['pip', 'install', 'openpyxl', '--break-system-packages'])
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+
+class AdvancedUDFilesHSMComparisonGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("UD Files HSM Comparison Tool (Advanced)")
+        self.root.geometry("950x750")
+        
+        self.ud_files_path = None
+        self.hsm_file_path = None
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="UD Files HSM Comparison Tool (Advanced)", 
+                                font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        subtitle_label = ttk.Label(main_frame, 
+                                   text="⚡ Single or dual-scenario comparison", 
+                                   font=('Arial', 10, 'italic'), foreground='blue')
+        subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+        
+        # Mode selection
+        mode_frame = ttk.LabelFrame(main_frame, text="Comparison Mode", padding="10")
+        mode_frame.grid(row=2, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        
+        self.mode_var = tk.StringVar(value="single")
+        ttk.Radiobutton(mode_frame, text="Single Comparison", variable=self.mode_var, 
+                       value="single", command=self.on_mode_change).grid(row=0, column=0, padx=20, sticky=tk.W)
+        ttk.Radiobutton(mode_frame, text="Two Scenarios Comparison", variable=self.mode_var, 
+                       value="dual", command=self.on_mode_change).grid(row=0, column=1, padx=20, sticky=tk.W)
+        
+        # Extraction method selection
+        extraction_frame = ttk.LabelFrame(main_frame, text="Extraction Method", padding="10")
+        extraction_frame.grid(row=3, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        
+        # Single mode extraction
+        self.single_extraction_frame = ttk.Frame(extraction_frame)
+        self.single_extraction_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        self.extraction_var = tk.StringVar(value="filename_only")
+        ttk.Radiobutton(self.single_extraction_frame, text="Filename only (after last /)", 
+                       variable=self.extraction_var, value="filename_only").grid(row=0, column=0, padx=10, sticky=tk.W)
+        ttk.Radiobutton(self.single_extraction_frame, text="5 chars before / + filename", 
+                       variable=self.extraction_var, value="5_chars").grid(row=0, column=1, padx=10, sticky=tk.W)
+        
+        # Dual mode extraction
+        self.dual_extraction_frame = ttk.Frame(extraction_frame)
+        
+        ttk.Label(self.dual_extraction_frame, text="Scenario 1:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.scenario1_var = tk.StringVar(value="filename_only")
+        ttk.Radiobutton(self.dual_extraction_frame, text="Filename only", 
+                       variable=self.scenario1_var, value="filename_only").grid(row=0, column=1, padx=10)
+        ttk.Radiobutton(self.dual_extraction_frame, text="5 chars + filename", 
+                       variable=self.scenario1_var, value="5_chars").grid(row=0, column=2, padx=10)
+        
+        ttk.Label(self.dual_extraction_frame, text="Scenario 2:", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.scenario2_var = tk.StringVar(value="5_chars")
+        ttk.Radiobutton(self.dual_extraction_frame, text="Filename only", 
+                       variable=self.scenario2_var, value="filename_only").grid(row=1, column=1, padx=10)
+        ttk.Radiobutton(self.dual_extraction_frame, text="5 chars + filename", 
+                       variable=self.scenario2_var, value="5_chars").grid(row=1, column=2, padx=10)
+        
+        # File selection
+        ttk.Label(main_frame, text="ud_files.lst:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.ud_files_label = ttk.Label(main_frame, text="No file selected", foreground="gray", wraplength=500)
+        self.ud_files_label.grid(row=4, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_ud_files).grid(row=4, column=2, padx=5)
+        
+        ttk.Label(main_frame, text="HSM list file:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        self.hsm_label = ttk.Label(main_frame, text="No file selected", foreground="gray", wraplength=500)
+        self.hsm_label.grid(row=5, column=1, sticky=tk.W, padx=5)
+        ttk.Button(main_frame, text="Browse...", command=self.select_hsm_file).grid(row=5, column=2, padx=5)
+        
+        # Info box
+        info_frame = ttk.LabelFrame(main_frame, text="What this does", padding="10")
+        info_frame.grid(row=6, column=0, columnspan=3, pady=15, sticky=(tk.W, tk.E))
+        
+        info_text = tk.Text(info_frame, height=7, width=100, wrap=tk.WORD)
+        info_text.grid(row=0, column=0)
+        info_text.insert(tk.END, "Single Mode: Compare with one extraction method\n")
+        info_text.insert(tk.END, "Dual Mode: Run TWO comparisons, get results for both + difference report\n\n")
+        info_text.insert(tk.END, "  • Filename only: 'path/to/file.txt' → 'file.txt'\n")
+        info_text.insert(tk.END, "  • 5 chars: 'path/to/file.txt' → 'o/to/file.txt'\n\n")
+        info_text.insert(tk.END, "Filters: drwx excluded, bg-ingest separated\n")
+        info_text.insert(tk.END, "Match: EXACT (case-insensitive, whitespace-ignored)")
+        info_text.config(state=tk.DISABLED)
+        
+        # Compare button
+        self.compare_button = ttk.Button(main_frame, text="Run Comparison", 
+                                        command=self.start_comparison, state=tk.DISABLED)
+        self.compare_button.grid(row=7, column=0, columnspan=3, pady=15)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate', length=600)
+        self.progress.grid(row=8, column=0, columnspan=3, pady=5)
+        
+        # Status text area
+        ttk.Label(main_frame, text="Processing Status:").grid(row=9, column=0, columnspan=3, sticky=tk.W, pady=(10,0))
+        self.status_text = scrolledtext.ScrolledText(main_frame, height=12, width=100, wrap=tk.WORD)
+        self.status_text.grid(row=10, column=0, columnspan=3, pady=5)
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(10, weight=1)
+    
+    def on_mode_change(self):
+        if self.mode_var.get() == "single":
+            self.dual_extraction_frame.grid_forget()
+            self.single_extraction_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        else:
+            self.single_extraction_frame.grid_forget()
+            self.dual_extraction_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
+    
+    def select_ud_files(self):
+        filepath = filedialog.askopenfilename(
+            title="Select ud_files.lst file",
+            filetypes=[("List files", "*.lst"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.ud_files_path = filepath
+            self.ud_files_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def select_hsm_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select HSM list file",
+            filetypes=[("List files", "*.lst"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.hsm_file_path = filepath
+            self.hsm_label.config(text=os.path.basename(filepath), foreground="black")
+            self.check_ready()
+    
+    def check_ready(self):
+        if self.ud_files_path and self.hsm_file_path:
+            self.compare_button.config(state=tk.NORMAL)
+    
+    def log(self, message):
+        self.status_text.insert(tk.END, message + "\n")
+        self.status_text.see(tk.END)
+        self.status_text.update()
+    
+    def start_comparison(self):
+        self.compare_button.config(state=tk.DISABLED)
+        self.status_text.delete(1.0, tk.END)
+        self.progress.start()
+        thread = threading.Thread(target=self.compare_files)
+        thread.start()
+    
+    def normalize_string(self, s):
+        return ''.join(s.upper().split())
+    
+    def extract_filename(self, line, method):
+        if '/' not in line:
+            return None
+        
+        if method == 'filename_only':
+            return line.rsplit('/', 1)[-1].strip()
+        elif method == '5_chars':
+            before_slash, after_slash = line.rsplit('/', 1)
+            last_5_chars = before_slash[-5:] if len(before_slash) >= 5 else before_slash
+            return f"{last_5_chars}/{after_slash.strip()}"
+        return None
+    
+    def build_hash_index(self, entries, name):
+        self.log(f"Building hash index for {name}...")
+        hash_index = {}
+        for orig_line, filename, norm_filename in entries:
+            if norm_filename not in hash_index:
+                hash_index[norm_filename] = (orig_line, filename)
+        self.log(f"✓ Index complete: {len(hash_index):,} unique filenames\n")
+        return hash_index
+    
+    def compare_files(self):
+        try:
+            mode = self.mode_var.get()
+            
+            if mode == "single":
+                self.compare_single_scenario()
+            else:
+                self.compare_dual_scenarios()
+                
+        except Exception as e:
+            self.log(f"\nERROR: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+        finally:
+            self.progress.stop()
+            self.compare_button.config(state=tk.NORMAL)
+    
+    def compare_single_scenario(self):
+        extraction_method = self.extraction_var.get()
+        method_name = "Filename only" if extraction_method == "filename_only" else "5 chars + filename"
+        
+        self.log("="*70)
+        self.log("SINGLE SCENARIO COMPARISON")
+        self.log(f"Method: {method_name}")
+        self.log("="*70)
+        
+        results = self.run_comparison_scenario(extraction_method, "")
+        
+        output_file = self.create_single_excel(results, extraction_method)
+        
+        match_rate = (len(results['matches']) / results['ud_total'] * 100) if results['ud_total'] > 0 else 0
+        
+        self.log(f"\n{'='*70}")
+        self.log("SUMMARY")
+        self.log(f"{'='*70}")
+        self.log(f"Method: {method_name}")
+        self.log(f"ud_files: {results['ud_total']:,} | HSM: {results['hsm_total']:,} | Excluded (drwx): {len(results['drwx_entries']):,}")
+        self.log(f"Found in HSM: {len(results['matches']):,} ({match_rate:.1f}%)")
+        self.log(f"bg-ingest: {len(results['bg_ingest_matches']):,} | Not in HSM: {len(results['unique']):,}")
+        self.log(f"\nReport: {os.path.basename(output_file)}")
+        
+        messagebox.showinfo("Success", 
+            f"Comparison complete!\n\n"
+            f"Method: {method_name}\n"
+            f"Found in HSM: {len(results['matches']):,} ({match_rate:.1f}%)\n"
+            f"Not in HSM: {len(results['unique']):,}\n\n"
+            f"Report saved!")
+    
+    def compare_dual_scenarios(self):
+        method1 = self.scenario1_var.get()
+        method2 = self.scenario2_var.get()
+        name1 = "Filename only" if method1 == "filename_only" else "5 chars + filename"
+        name2 = "Filename only" if method2 == "filename_only" else "5 chars + filename"
+        
+        self.log("="*70)
+        self.log("DUAL SCENARIO COMPARISON")
+        self.log(f"Scenario 1: {name1}")
+        self.log(f"Scenario 2: {name2}")
+        self.log("="*70)
+        
+        self.log("\n" + "="*70)
+        self.log("RUNNING SCENARIO 1")
+        self.log("="*70)
+        results1 = self.run_comparison_scenario(method1, "Scenario 1")
+        
+        self.log("\n" + "="*70)
+        self.log("RUNNING SCENARIO 2")
+        self.log("="*70)
+        results2 = self.run_comparison_scenario(method2, "Scenario 2")
+        
+        self.log("\n" + "="*70)
+        self.log("CALCULATING DIFFERENCES")
+        self.log("="*70)
+        differences = self.calculate_differences(results1, results2)
+        
+        output_file = self.create_dual_excel(results1, results2, differences, method1, method2)
+        
+        match_rate1 = (len(results1['matches']) / results1['ud_total'] * 100) if results1['ud_total'] > 0 else 0
+        match_rate2 = (len(results2['matches']) / results2['ud_total'] * 100) if results2['ud_total'] > 0 else 0
+        
+        self.log(f"\n{'='*70}")
+        self.log("SUMMARY")
+        self.log(f"{'='*70}")
+        self.log(f"\nScenario 1 ({name1}):")
+        self.log(f"  Found in HSM: {len(results1['matches']):,} ({match_rate1:.1f}%)")
+        self.log(f"\nScenario 2 ({name2}):")
+        self.log(f"  Found in HSM: {len(results2['matches']):,} ({match_rate2:.1f}%)")
+        self.log(f"\nDifferences:")
+        self.log(f"  Only in Scenario 1: {len(differences['only_in_1']):,}")
+        self.log(f"  Only in Scenario 2: {len(differences['only_in_2']):,}")
+        self.log(f"  In both: {len(differences['in_both']):,}")
+        self.log(f"\nReport: {os.path.basename(output_file)}")
+        
+        messagebox.showinfo("Success", 
+            f"Dual comparison complete!\n\n"
+            f"Scenario 1: {len(results1['matches']):,} matches\n"
+            f"Scenario 2: {len(results2['matches']):,} matches\n\n"
+            f"Only in S1: {len(differences['only_in_1']):,}\n"
+            f"Only in S2: {len(differences['only_in_2']):,}\n\n"
+            f"Report saved!")
+    
+    def run_comparison_scenario(self, extraction_method, label):
+        # Load HSM
+        self.log(f"Loading HSM file...")
+        hsm_entries = []
+        with open(self.hsm_file_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line:
+                    filename = self.extract_filename(line, extraction_method)
+                    if filename:
+                        normalized = self.normalize_string(filename)
+                        hsm_entries.append((line, filename, normalized))
+                if line_num % 100000 == 0:
+                    self.log(f"  HSM: {line_num:,} lines...")
+        
+        self.log(f"✓ HSM: {len(hsm_entries):,} entries")
+        
+        # Load ud_files
+        self.log(f"Loading ud_files.lst...")
+        ud_entries = []
+        drwx_entries = []
+        with open(self.ud_files_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if line:
+                    if line.startswith('drwx'):
+                        drwx_entries.append(line)
+                        continue
+                    filename = self.extract_filename(line, extraction_method)
+                    if filename:
+                        normalized = self.normalize_string(filename)
+                        ud_entries.append((line, filename, normalized))
+                if line_num % 100000 == 0:
+                    self.log(f"  ud_files: {line_num:,} lines...")
+        
+        self.log(f"✓ ud_files: {len(ud_entries):,} entries")
+        if drwx_entries:
+            self.log(f"  Excluded {len(drwx_entries):,} drwx entries")
+        
+        # Build HSM index
+        hsm_index = self.build_hash_index(hsm_entries, "HSM")
+        
+        # Compare
+        self.log("Comparing...")
+        matches = []
+        bg_ingest_matches = []
+        unique = []
+        
+        for idx, (ud_line, ud_filename, ud_normalized) in enumerate(ud_entries, 1):
+            if ud_normalized in hsm_index:
+                hsm_line, hsm_filename = hsm_index[ud_normalized]
+                match_data = {
+                    'ud_filename': ud_filename,
+                    'ud_line': ud_line,
+                    'hsm_filename': hsm_filename,
+                    'hsm_line': hsm_line,
+                    'normalized': ud_normalized
+                }
+                
+                if 'bg-ingest' in ud_line.lower():
+                    bg_ingest_matches.append(match_data)
+                else:
+                    matches.append(match_data)
+            else:
+                unique.append({
+                    'filename': ud_filename,
+                    'ud_line': ud_line,
+                    'normalized': ud_normalized
+                })
+            
+            if idx % 50000 == 0:
+                self.log(f"  Processed {idx:,}/{len(ud_entries):,}...")
+        
+        self.log(f"✓ Matches: {len(matches):,} | bg-ingest: {len(bg_ingest_matches):,} | Unique: {len(unique):,}")
+        
+        return {
+            'matches': matches,
+            'bg_ingest_matches': bg_ingest_matches,
+            'unique': unique,
+            'drwx_entries': drwx_entries,
+            'ud_total': len(ud_entries),
+            'hsm_total': len(hsm_entries)
+        }
+    
+    def calculate_differences(self, results1, results2):
+        # Get normalized matched entries from each scenario
+        matched_norm_1 = set(m['normalized'] for m in results1['matches'])
+        matched_norm_2 = set(m['normalized'] for m in results2['matches'])
+        
+        only_in_1_norm = matched_norm_1 - matched_norm_2
+        only_in_2_norm = matched_norm_2 - matched_norm_1
+        in_both_norm = matched_norm_1 & matched_norm_2
+        
+        # Get full data for differences
+        only_in_1 = [m for m in results1['matches'] if m['normalized'] in only_in_1_norm]
+        only_in_2 = [m for m in results2['matches'] if m['normalized'] in only_in_2_norm]
+        in_both = [m for m in results1['matches'] if m['normalized'] in in_both_norm]
+        
+        self.log(f"  Only in Scenario 1: {len(only_in_1):,}")
+        self.log(f"  Only in Scenario 2: {len(only_in_2):,}")
+        self.log(f"  In both: {len(in_both):,}")
+        
+        return {
+            'only_in_1': only_in_1,
+            'only_in_2': only_in_2,
+            'in_both': in_both
+        }
+    
+    def create_single_excel(self, results, method):
+        wb = Workbook()
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        self.log("\nCreating Excel report...")
+        
+        # Styling
+        h_blue = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        h_green = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        h_orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        h_red = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+        h_gray = PatternFill(start_color="808080", end_color="808080", fill_type="solid")
+        h_font = Font(bold=True, color="FFFFFF")
+        
+        method_name = "Filename only" if method == "filename_only" else "5 chars + filename"
+        
+        # SUMMARY
+        s = wb.create_sheet("SUMMARY", 0)
+        s['A1'] = f"UD FILES HSM COMPARISON - {method_name}"
+        s['A1'].font = Font(bold=True, size=14)
+        s.merge_cells('A1:C1')
+        
+        row = 3
+        s[f'A{row}'] = "ud_files entries:"; s[f'B{row}'] = results['ud_total']; row += 1
+        s[f'A{row}'] = "HSM entries:"; s[f'B{row}'] = results['hsm_total']; row += 1
+        s[f'A{row}'] = "Excluded (drwx):"; s[f'B{row}'] = len(results['drwx_entries']); row += 2
+        
+        s[f'A{row}'] = "Found in HSM:"; s[f'B{row}'] = len(results['matches'])
+        s[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"); row += 1
+        
+        s[f'A{row}'] = "bg-ingest:"; s[f'B{row}'] = len(results['bg_ingest_matches'])
+        s[f'B{row}'].fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"); row += 1
+        
+        s[f'A{row}'] = "Not in HSM:"; s[f'B{row}'] = len(results['unique'])
+        s[f'B{row}'].fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        
+        s.column_dimensions['A'].width = 25; s.column_dimensions['B'].width = 15
+        
+        # MATCHES
+        self._create_matches_sheet(wb, "FOUND IN HSM", results['matches'], h_green, h_font)
+        
+        # BG-INGEST
+        if results['bg_ingest_matches']:
+            self._create_matches_sheet(wb, "BG-INGEST", results['bg_ingest_matches'], h_orange, h_font)
+        
+        # UNIQUE
+        s = wb.create_sheet("NOT IN HSM")
+        s.cell(1, 1, "Extracted").fill = h_red; s.cell(1, 1).font = h_font
+        s.cell(1, 2, "ud_files Full Line").fill = h_red; s.cell(1, 2).font = h_font
+        for i, u in enumerate(results['unique'], 2):
+            s.cell(i, 1, u['filename']); s.cell(i, 2, u['ud_line'])
+        s.column_dimensions['A'].width = 50; s.column_dimensions['B'].width = 80
+        
+        # DRWX
+        if results['drwx_entries']:
+            s = wb.create_sheet("EXCLUDED DRWX")
+            s.cell(1, 1, "Full Line (Directory)").fill = h_gray; s.cell(1, 1).font = h_font
+            for i, line in enumerate(results['drwx_entries'], 2):
+                s.cell(i, 1, line)
+            s.column_dimensions['A'].width = 100
+        
+        output_file = os.path.join(os.path.dirname(self.ud_files_path), "UD_HSM_Comparison_Single.xlsx")
+        wb.save(output_file)
+        return output_file
+    
+    def _create_matches_sheet(self, wb, name, matches, fill, font):
+        s = wb.create_sheet(name)
+        headers = ["ud Extracted", "HSM Extracted", "ud Full Line", "HSM Full Line"]
+        for col, h in enumerate(headers, 1):
+            c = s.cell(1, col, h); c.fill = fill; c.font = font
+        for i, m in enumerate(matches, 2):
+            s.cell(i, 1, m['ud_filename']); s.cell(i, 2, m['hsm_filename'])
+            s.cell(i, 3, m['ud_line']); s.cell(i, 4, m['hsm_line'])
+        s.column_dimensions['A'].width = 50; s.column_dimensions['B'].width = 50
+        s.column_dimensions['C'].width = 80; s.column_dimensions['D'].width = 80
+    
+    def create_dual_excel(self, r1, r2, diff, method1, method2):
+        wb = Workbook()
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        self.log("\nCreating Excel report...")
+        
+        h_blue = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        h_green = PatternFill(start_color="00B050", end_color="00B050", fill_type="solid")
+        h_orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        h_red = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+        h_purple = PatternFill(start_color="9966FF", end_color="9966FF", fill_type="solid")
+        h_gray = PatternFill(start_color="808080", end_color="808080", fill_type="solid")
+        h_font = Font(bold=True, color="FFFFFF")
+        
+        name1 = "Filename only" if method1 == "filename_only" else "5 chars + filename"
+        name2 = "Filename only" if method2 == "filename_only" else "5 chars + filename"
+        
+        # SUMMARY
+        s = wb.create_sheet("SUMMARY", 0)
+        s['A1'] = "DUAL SCENARIO COMPARISON"
+        s['A1'].font = Font(bold=True, size=16)
+        s.merge_cells('A1:C1')
+        
+        row = 3
+        s[f'A{row}'] = "Scenario 1:"; s[f'B{row}'] = name1; s[f'A{row}'].font = Font(bold=True, size=12); row += 1
+        s[f'A{row}'] = "  Matches:"; s[f'B{row}'] = len(r1['matches'])
+        s[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"); row += 1
+        s[f'A{row}'] = "  bg-ingest:"; s[f'B{row}'] = len(r1['bg_ingest_matches']); row += 1
+        s[f'A{row}'] = "  Unique:"; s[f'B{row}'] = len(r1['unique']); row += 2
+        
+        s[f'A{row}'] = "Scenario 2:"; s[f'B{row}'] = name2; s[f'A{row}'].font = Font(bold=True, size=12); row += 1
+        s[f'A{row}'] = "  Matches:"; s[f'B{row}'] = len(r2['matches'])
+        s[f'B{row}'].fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"); row += 1
+        s[f'A{row}'] = "  bg-ingest:"; s[f'B{row}'] = len(r2['bg_ingest_matches']); row += 1
+        s[f'A{row}'] = "  Unique:"; s[f'B{row}'] = len(r2['unique']); row += 2
+        
+        s[f'A{row}'] = "Differences:"; s[f'A{row}'].font = Font(bold=True, size=12); row += 1
+        s[f'A{row}'] = "  Only in S1:"; s[f'B{row}'] = len(diff['only_in_1'])
+        s[f'B{row}'].fill = PatternFill(start_color="FFD9B3", end_color="FFD9B3", fill_type="solid"); row += 1
+        s[f'A{row}'] = "  Only in S2:"; s[f'B{row}'] = len(diff['only_in_2'])
+        s[f'B{row}'].fill = PatternFill(start_color="D9B3FF", end_color="D9B3FF", fill_type="solid"); row += 1
+        s[f'A{row}'] = "  In both:"; s[f'B{row}'] = len(diff['in_both'])
+        s[f'B{row}'].fill = PatternFill(start_color="B3D9FF", end_color="B3D9FF", fill_type="solid")
+        
+        s.column_dimensions['A'].width = 25; s.column_dimensions['B'].width = 20
+        
+        # Scenario 1 sheets
+        self._create_matches_sheet(wb, "S1 - FOUND IN HSM", r1['matches'], h_green, h_font)
+        if r1['bg_ingest_matches']:
+            self._create_matches_sheet(wb, "S1 - BG-INGEST", r1['bg_ingest_matches'], h_orange, h_font)
+        self._create_unique_sheet(wb, "S1 - NOT IN HSM", r1['unique'], h_red, h_font)
+        
+        # Scenario 2 sheets
+        self._create_matches_sheet(wb, "S2 - FOUND IN HSM", r2['matches'], h_green, h_font)
+        if r2['bg_ingest_matches']:
+            self._create_matches_sheet(wb, "S2 - BG-INGEST", r2['bg_ingest_matches'], h_orange, h_font)
+        self._create_unique_sheet(wb, "S2 - NOT IN HSM", r2['unique'], h_red, h_font)
+        
+        # Differences
+        self._create_matches_sheet(wb, "DIFF - Only in S1", diff['only_in_1'], h_orange, h_font)
+        self._create_matches_sheet(wb, "DIFF - Only in S2", diff['only_in_2'], h_purple, h_font)
+        self._create_matches_sheet(wb, "DIFF - In Both", diff['in_both'], h_blue, h_font)
+        
+        # DRWX (same for both scenarios)
+        if r1['drwx_entries']:
+            s = wb.create_sheet("EXCLUDED DRWX")
+            s.cell(1, 1, "Full Line").fill = h_gray; s.cell(1, 1).font = h_font
+            for i, line in enumerate(r1['drwx_entries'], 2):
+                s.cell(i, 1, line)
+            s.column_dimensions['A'].width = 100
+        
+        output_file = os.path.join(os.path.dirname(self.ud_files_path), "UD_HSM_Comparison_Dual.xlsx")
+        wb.save(output_file)
+        return output_file
+    
+    def _create_unique_sheet(self, wb, name, unique, fill, font):
+        s = wb.create_sheet(name)
+        s.cell(1, 1, "Extracted").fill = fill; s.cell(1, 1).font = font
+        s.cell(1, 2, "ud Full Line").fill = fill; s.cell(1, 2).font = font
+        for i, u in enumerate(unique, 2):
+            s.cell(i, 1, u['filename']); s.cell(i, 2, u['ud_line'])
+        s.column_dimensions['A'].width = 50; s.column_dimensions['B'].width = 80
+
+
+def main():
+    root = tk.Tk()
+    app = AdvancedUDFilesHSMComparisonGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
