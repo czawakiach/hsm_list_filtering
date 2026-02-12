@@ -1,0 +1,182 @@
+"""
+Text-to-Excel Converter
+Loads a text file (one string per line) and saves it to an Excel file.
+Handles 300k+ rows efficiently using openpyxl in write-only mode.
+"""
+
+import os
+import re
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+# Matches HH:MM (00:00–23:59) and captures everything after it
+TIME_PATTERN = re.compile(r"\d{2}:\d{2}\s+(.*)")
+
+
+def convert_txt_to_excel(input_path, output_path, progress_callback=None, done_callback=None):
+    """Convert a text file to Excel. Runs in a background thread."""
+    try:
+        from openpyxl import Workbook
+
+        # Count lines first for progress reporting
+        with open(input_path, "r", encoding="utf-8", errors="replace") as f:
+            total_lines = sum(1 for _ in f)
+
+        if total_lines == 0:
+            raise ValueError("The text file is empty.")
+
+        # Use write-only mode for memory efficiency with large files
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title="Data")
+
+        written = 0
+        skipped = 0
+
+        with open(input_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f, start=1):
+                stripped = line.rstrip("\n\r")
+
+                # Skip directory entries
+                if stripped.startswith("drwx"):
+                    skipped += 1
+                    if progress_callback and i % 5000 == 0:
+                        progress_callback(i, total_lines)
+                    continue
+
+                # Extract the part after HH:MM
+                m = TIME_PATTERN.search(stripped)
+                value = m.group(1).strip() if m else stripped
+
+                if value:
+                    ws.append([value])
+                    written += 1
+
+                if progress_callback and i % 5000 == 0:
+                    progress_callback(i, total_lines)
+
+        if progress_callback:
+            progress_callback(total_lines, total_lines)
+
+        wb.save(output_path)
+
+        if done_callback:
+            done_callback(True, total_lines, output_path, written, skipped)
+
+    except Exception as e:
+        if done_callback:
+            done_callback(False, 0, str(e), 0, 0)
+
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Text → Excel Converter")
+        self.root.geometry("560x320")
+        self.root.resizable(False, False)
+
+        self.input_path = tk.StringVar()
+        self.output_path = tk.StringVar()
+
+        # ── Input file ──
+        frame_in = ttk.LabelFrame(root, text="Input text file", padding=10)
+        frame_in.pack(fill="x", padx=15, pady=(15, 5))
+
+        ttk.Entry(frame_in, textvariable=self.input_path, width=55).pack(side="left", padx=(0, 5))
+        ttk.Button(frame_in, text="Browse…", command=self.browse_input).pack(side="left")
+
+        # ── Output file ──
+        frame_out = ttk.LabelFrame(root, text="Output Excel file", padding=10)
+        frame_out.pack(fill="x", padx=15, pady=5)
+
+        ttk.Entry(frame_out, textvariable=self.output_path, width=55).pack(side="left", padx=(0, 5))
+        ttk.Button(frame_out, text="Browse…", command=self.browse_output).pack(side="left")
+
+        # ── Progress ──
+        self.progress = ttk.Progressbar(root, length=530, mode="determinate")
+        self.progress.pack(padx=15, pady=(15, 5))
+
+        self.status_label = ttk.Label(root, text="Ready", anchor="center")
+        self.status_label.pack(fill="x", padx=15)
+
+        # ── Convert button ──
+        self.convert_btn = ttk.Button(root, text="Convert", command=self.start_conversion)
+        self.convert_btn.pack(pady=15)
+
+    # ── Dialogs ──
+    def browse_input(self):
+        path = filedialog.askopenfilename(
+            title="Select text file",
+            filetypes=[("Text files", "*.txt *.csv *.log *.dat"), ("All files", "*.*")],
+        )
+        if path:
+            self.input_path.set(path)
+            # Auto-suggest output path
+            base, _ = os.path.splitext(path)
+            self.output_path.set(base + ".xlsx")
+
+    def browse_output(self):
+        path = filedialog.asksaveasfilename(
+            title="Save Excel file as",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+        )
+        if path:
+            self.output_path.set(path)
+
+    # ── Conversion ──
+    def start_conversion(self):
+        in_path = self.input_path.get().strip()
+        out_path = self.output_path.get().strip()
+
+        if not in_path or not os.path.isfile(in_path):
+            messagebox.showerror("Error", "Please select a valid input text file.")
+            return
+        if not out_path:
+            messagebox.showerror("Error", "Please specify an output file path.")
+            return
+
+        self.convert_btn.config(state="disabled")
+        self.progress["value"] = 0
+        self.status_label.config(text="Reading file…")
+
+        thread = threading.Thread(
+            target=convert_txt_to_excel,
+            args=(in_path, out_path, self._on_progress, self._on_done),
+            daemon=True,
+        )
+        thread.start()
+
+    def _on_progress(self, current, total):
+        pct = current / total * 100
+        self.root.after(0, self._update_progress, pct, f"Processing… {current:,} / {total:,} rows")
+
+    def _update_progress(self, pct, text):
+        self.progress["value"] = pct
+        self.status_label.config(text=text)
+
+    def _on_done(self, success, total_lines, detail, written, skipped):
+        self.root.after(0, self._finish, success, total_lines, detail, written, skipped)
+
+    def _finish(self, success, total_lines, detail, written, skipped):
+        self.convert_btn.config(state="normal")
+        if success:
+            self.progress["value"] = 100
+            self.status_label.config(text=f"Done — {written:,} rows saved, {skipped:,} skipped (drwx).")
+            messagebox.showinfo(
+                "Success",
+                f"Input lines: {total_lines:,}\n"
+                f"Skipped (drwx): {skipped:,}\n"
+                f"Rows saved: {written:,}\n\n"
+                f"File: {detail}",
+            )
+        else:
+            self.progress["value"] = 0
+            self.status_label.config(text="Error")
+            messagebox.showerror("Error", f"Conversion failed:\n{detail}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
