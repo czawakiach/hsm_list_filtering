@@ -1,0 +1,332 @@
+"""
+Log File String Analyzer
+- Removes duplicates and counts them
+- Extracts 3-char country codes after the 7th forward slash
+- Reports country code frequencies
+- Exports "others" and summary to Excel
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import os
+from collections import Counter
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+
+def extract_country_code(line):
+    """Extract 3-char substring after the 7th '/' in the string."""
+    parts = line.split('/')
+    if len(parts) > 7:
+        # The text after the 7th slash is parts[7]
+        segment = parts[7]
+        if len(segment) >= 3:
+            code = segment[:3].upper()
+            if code.isalpha():
+                return code
+    return None
+
+
+def process_file(filepath, progress_callback, done_callback):
+    """Process the log file in a background thread."""
+    try:
+        progress_callback("Reading file...")
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            lines = [line.strip() for line in f if line.strip()]
+
+        total_lines = len(lines)
+        progress_callback(f"Read {total_lines:,} lines. Removing duplicates...")
+
+        # Step 1: Remove duplicates
+        unique_lines = list(dict.fromkeys(lines))  # preserves order
+        unique_count = len(unique_lines)
+        duplicate_count = total_lines - unique_count
+
+        progress_callback(f"Found {unique_count:,} unique lines ({duplicate_count:,} duplicates). Extracting country codes...")
+
+        # Step 2: Extract country codes
+        country_counter = Counter()
+        others_lines = []
+
+        for line in unique_lines:
+            code = extract_country_code(line)
+            if code:
+                country_counter[code] += 1
+            else:
+                others_lines.append(line)
+
+        # Step 3: Move single-occurrence codes to "others"
+        single_codes = [code for code, count in country_counter.items() if count == 1]
+        for code in single_codes:
+            # Find the line(s) matching this code and move to others
+            for line in unique_lines:
+                extracted = extract_country_code(line)
+                if extracted and extracted.upper() == code:
+                    others_lines.append(line)
+            del country_counter[code]
+
+        # Sort by count descending
+        sorted_countries = country_counter.most_common()
+
+        total_country_coded = sum(count for _, count in sorted_countries)
+        total_others = len(others_lines)
+
+        progress_callback("Generating Excel report...")
+
+        # Step 4: Write Excel
+        output_path = os.path.splitext(filepath)[0] + "_analysis.xlsx"
+        write_excel(output_path, sorted_countries, others_lines,
+                    total_lines, unique_count, duplicate_count,
+                    total_country_coded, total_others, len(single_codes))
+
+        summary = {
+            'total_lines': total_lines,
+            'unique_count': unique_count,
+            'duplicate_count': duplicate_count,
+            'country_codes': sorted_countries,
+            'total_country_coded': total_country_coded,
+            'total_others': total_others,
+            'single_codes_moved': len(single_codes),
+            'output_path': output_path,
+        }
+        done_callback(summary, None)
+
+    except Exception as e:
+        done_callback(None, str(e))
+
+
+def write_excel(output_path, sorted_countries, others_lines,
+                total_lines, unique_count, duplicate_count,
+                total_country_coded, total_others, single_codes_moved):
+    """Write the analysis results to a formatted Excel file."""
+    wb = Workbook()
+
+    # --- Summary Sheet ---
+    ws_summary = wb.active
+    ws_summary.title = "Summary"
+
+    header_font = Font(name='Arial', bold=True, size=12, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='2F5496')
+    subheader_font = Font(name='Arial', bold=True, size=10)
+    subheader_fill = PatternFill('solid', fgColor='D6E4F0')
+    normal_font = Font(name='Arial', size=10)
+    number_font = Font(name='Arial', size=10, bold=True, color='2F5496')
+    thin_border = Border(
+        left=Side(style='thin', color='B0B0B0'),
+        right=Side(style='thin', color='B0B0B0'),
+        top=Side(style='thin', color='B0B0B0'),
+        bottom=Side(style='thin', color='B0B0B0'),
+    )
+
+    # Title
+    ws_summary['A1'] = 'Log File Analysis Report'
+    ws_summary['A1'].font = Font(name='Arial', bold=True, size=14, color='2F5496')
+    ws_summary.merge_cells('A1:C1')
+
+    # Overview section
+    row = 3
+    overview_data = [
+        ('Total Lines in File', total_lines),
+        ('Unique Lines', unique_count),
+        ('Duplicate Lines Removed', duplicate_count),
+        ('Lines with Valid Country Code', total_country_coded),
+        ('Lines in "Others"', total_others),
+        ('Single-occurrence Codes Moved to Others', single_codes_moved),
+        ('Distinct Country Codes Found', len(sorted_countries)),
+    ]
+
+    ws_summary.cell(row=row, column=1, value='OVERVIEW').font = header_font
+    ws_summary.cell(row=row, column=1).fill = header_fill
+    ws_summary.cell(row=row, column=2).fill = header_fill
+    ws_summary.cell(row=row, column=3).fill = header_fill
+    row += 1
+
+    for label, value in overview_data:
+        c1 = ws_summary.cell(row=row, column=1, value=label)
+        c2 = ws_summary.cell(row=row, column=2, value=value)
+        c1.font = normal_font
+        c2.font = number_font
+        c2.number_format = '#,##0'
+        c1.border = thin_border
+        c2.border = thin_border
+        row += 1
+
+    row += 1
+
+    # Country codes section
+    ws_summary.cell(row=row, column=1, value='COUNTRY CODE').font = header_font
+    ws_summary.cell(row=row, column=1).fill = header_fill
+    ws_summary.cell(row=row, column=2, value='COUNT').font = header_font
+    ws_summary.cell(row=row, column=2).fill = header_fill
+    ws_summary.cell(row=row, column=3, value='% OF TOTAL').font = header_font
+    ws_summary.cell(row=row, column=3).fill = header_fill
+    row += 1
+
+    for code, count in sorted_countries:
+        pct = count / unique_count * 100 if unique_count > 0 else 0
+        c1 = ws_summary.cell(row=row, column=1, value=code)
+        c2 = ws_summary.cell(row=row, column=2, value=count)
+        c3 = ws_summary.cell(row=row, column=3, value=round(pct, 2))
+        c1.font = Font(name='Arial', size=10, bold=True)
+        c2.font = number_font
+        c2.number_format = '#,##0'
+        c3.font = normal_font
+        c3.number_format = '0.00"%"'
+        for c in [c1, c2, c3]:
+            c.border = thin_border
+        row += 1
+
+    # Column widths
+    ws_summary.column_dimensions['A'].width = 42
+    ws_summary.column_dimensions['B'].width = 16
+    ws_summary.column_dimensions['C'].width = 16
+
+    # --- Others Sheet ---
+    ws_others = wb.create_sheet("Others")
+    ws_others.cell(row=1, column=1, value='#').font = header_font
+    ws_others.cell(row=1, column=1).fill = header_fill
+    ws_others.cell(row=1, column=2, value='String').font = header_font
+    ws_others.cell(row=1, column=2).fill = header_fill
+    ws_others.cell(row=1, column=1).border = thin_border
+    ws_others.cell(row=1, column=2).border = thin_border
+
+    for i, line in enumerate(others_lines, start=1):
+        c1 = ws_others.cell(row=i + 1, column=1, value=i)
+        c2 = ws_others.cell(row=i + 1, column=2, value=line)
+        c1.font = normal_font
+        c2.font = normal_font
+        c1.border = thin_border
+        c2.border = thin_border
+
+    ws_others.column_dimensions['A'].width = 10
+    ws_others.column_dimensions['B'].width = 120
+    ws_others.auto_filter.ref = f"A1:B{len(others_lines) + 1}"
+
+    wb.save(output_path)
+
+
+class LogAnalyzerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Log File String Analyzer")
+        self.root.geometry("780x620")
+        self.root.configure(bg='#f0f0f0')
+
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('Title.TLabel', font=('Arial', 16, 'bold'), background='#f0f0f0', foreground='#2F5496')
+        style.configure('TButton', font=('Arial', 10), padding=6)
+        style.configure('Accent.TButton', font=('Arial', 11, 'bold'), padding=8)
+        style.configure('TLabel', font=('Arial', 10), background='#f0f0f0')
+        style.configure('Status.TLabel', font=('Arial', 9), background='#f0f0f0', foreground='#666')
+        style.configure('Result.TLabel', font=('Arial', 10, 'bold'), background='#f0f0f0', foreground='#2F5496')
+
+        # Title
+        ttk.Label(root, text="Log File String Analyzer", style='Title.TLabel').pack(pady=(15, 5))
+        ttk.Label(root, text="Deduplicates strings, extracts country codes, exports to Excel", style='Status.TLabel').pack()
+
+        # File selection frame
+        file_frame = ttk.LabelFrame(root, text="Input File", padding=10)
+        file_frame.pack(fill='x', padx=20, pady=(15, 5))
+
+        self.file_var = tk.StringVar()
+        entry = ttk.Entry(file_frame, textvariable=self.file_var, font=('Arial', 9))
+        entry.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        ttk.Button(file_frame, text="Browse...", command=self.browse_file).pack(side='right')
+
+        # Process button
+        self.process_btn = ttk.Button(root, text="▶  Analyze File", style='Accent.TButton', command=self.start_processing)
+        self.process_btn.pack(pady=12)
+
+        # Status
+        self.status_var = tk.StringVar(value="Select a .log file to begin.")
+        ttk.Label(root, textvariable=self.status_var, style='Status.TLabel').pack()
+
+        # Progress bar
+        self.progress = ttk.Progressbar(root, mode='indeterminate', length=400)
+        self.progress.pack(pady=(5, 10))
+
+        # Results frame
+        results_frame = ttk.LabelFrame(root, text="Results", padding=10)
+        results_frame.pack(fill='both', expand=True, padx=20, pady=(5, 15))
+
+        self.results_text = tk.Text(results_frame, font=('Consolas', 9), bg='#fafafa',
+                                    relief='flat', wrap='word', state='disabled', height=16)
+        scrollbar = ttk.Scrollbar(results_frame, orient='vertical', command=self.results_text.yview)
+        self.results_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        self.results_text.pack(fill='both', expand=True)
+
+    def browse_file(self):
+        filepath = filedialog.askopenfilename(
+            title="Select Log File",
+            filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filepath:
+            self.file_var.set(filepath)
+
+    def start_processing(self):
+        filepath = self.file_var.get().strip()
+        if not filepath or not os.path.isfile(filepath):
+            messagebox.showerror("Error", "Please select a valid file.")
+            return
+
+        self.process_btn.configure(state='disabled')
+        self.progress.start(10)
+        self.set_results("")
+
+        thread = threading.Thread(target=process_file, args=(
+            filepath,
+            lambda msg: self.root.after(0, self.update_status, msg),
+            lambda summary, err: self.root.after(0, self.on_done, summary, err),
+        ), daemon=True)
+        thread.start()
+
+    def update_status(self, msg):
+        self.status_var.set(msg)
+
+    def on_done(self, summary, error):
+        self.progress.stop()
+        self.process_btn.configure(state='normal')
+
+        if error:
+            self.status_var.set("Error occurred.")
+            messagebox.showerror("Processing Error", error)
+            return
+
+        self.status_var.set(f"Done! Excel saved to: {summary['output_path']}")
+
+        lines = []
+        lines.append(f"{'='*50}")
+        lines.append(f"  ANALYSIS COMPLETE")
+        lines.append(f"{'='*50}")
+        lines.append(f"  Total lines:           {summary['total_lines']:>10,}")
+        lines.append(f"  Unique lines:          {summary['unique_count']:>10,}")
+        lines.append(f"  Duplicates removed:    {summary['duplicate_count']:>10,}")
+        lines.append(f"  Country-coded lines:   {summary['total_country_coded']:>10,}")
+        lines.append(f"  Others:                {summary['total_others']:>10,}")
+        lines.append(f"  Single-code → Others:  {summary['single_codes_moved']:>10,}")
+        lines.append(f"{'─'*50}")
+        lines.append(f"  COUNTRY CODES ({len(summary['country_codes'])} found)")
+        lines.append(f"{'─'*50}")
+
+        for code, count in summary['country_codes']:
+            lines.append(f"    {code}  —  {count:,}")
+
+        lines.append(f"{'─'*50}")
+        lines.append(f"  Output: {summary['output_path']}")
+        self.set_results('\n'.join(lines))
+
+    def set_results(self, text):
+        self.results_text.configure(state='normal')
+        self.results_text.delete('1.0', 'end')
+        self.results_text.insert('1.0', text)
+        self.results_text.configure(state='disabled')
+
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    app = LogAnalyzerApp(root)
+    root.mainloop()
