@@ -1,0 +1,386 @@
+"""
+Path Analyzer — extracts the segment between the 4th and 5th '/' in each line.
+Provides a Tkinter GUI, handles 300k+ rows efficiently, and exports an Excel report.
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import collections
+import os
+from datetime import datetime
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def extract_segment(line: str) -> str | None:
+    parts = line.split("/")
+    if len(parts) >= 6:
+        return parts[4]
+    return None
+
+
+def analyse_file(path: str, progress_cb, done_cb):
+    matched: collections.Counter = collections.Counter()
+    unmatched: list[tuple[int, str]] = []
+    try:
+        size = os.path.getsize(path)
+        bytes_read = 0
+        lineno = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for lineno, raw in enumerate(fh, 1):
+                line = raw.rstrip("\n\r")
+                bytes_read += len(raw.encode("utf-8", errors="replace"))
+                seg = extract_segment(line)
+                if seg is not None:
+                    matched[seg] += 1
+                else:
+                    unmatched.append((lineno, line))
+                if lineno % 10_000 == 0:
+                    pct = min(int(bytes_read / size * 100), 99) if size else 0
+                    progress_cb(pct)
+        progress_cb(100)
+        done_cb({"matched": matched, "unmatched": unmatched, "total": lineno})
+    except Exception as exc:
+        done_cb({"error": str(exc)})
+
+
+# ── Excel export ──────────────────────────────────────────────────────────────
+
+FONT_NAME    = "Arial"
+C_DARK_BLUE  = "0D47A1"
+C_BLUE       = "1976D2"
+C_ORANGE     = "E65100"
+C_ALT_BLUE   = "E3F2FD"
+C_ALT_GREEN  = "E8F5E9"
+C_ALT_ORANGE = "FFF3E0"
+C_TOTALS     = "CFD8DC"
+
+thin   = Side(style="thin", color="BDBDBD")
+BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+
+def _font(bold=False, size=10, color="000000"):
+    return Font(name=FONT_NAME, bold=bold, size=size, color=color)
+
+def _fill(hex_color):
+    return PatternFill("solid", fgColor=hex_color)
+
+def _centre():
+    return Alignment(horizontal="center", vertical="center")
+
+def _left():
+    return Alignment(horizontal="left", vertical="center")
+
+def _right():
+    return Alignment(horizontal="right", vertical="center")
+
+def _write_header_row(ws, row_num, labels, bg_hex):
+    for col, label in enumerate(labels, 1):
+        c = ws.cell(row=row_num, column=col, value=label)
+        c.font = _font(bold=True, size=11, color="FFFFFF")
+        c.fill = _fill(bg_hex)
+        c.alignment = _centre()
+        c.border = BORDER
+
+
+def export_excel(out_path: str, results: dict):
+    matched: collections.Counter = results["matched"]
+    unmatched: list               = results["unmatched"]
+    total: int                    = results["total"]
+    matched_total                 = sum(matched.values())
+
+    wb = Workbook()
+
+    # ── Sheet 1: Summary ─────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "Summary"
+
+    ws.merge_cells("A1:C1")
+    t = ws["A1"]
+    t.value     = "Path Segment Analysis Report"
+    t.font      = _font(bold=True, size=14, color="FFFFFF")
+    t.fill      = _fill(C_DARK_BLUE)
+    t.alignment = _centre()
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells("A2:C2")
+    d = ws["A2"]
+    d.value     = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    d.font      = _font(size=9, color="555555")
+    d.alignment = _centre()
+
+    _write_header_row(ws, 3, ["Metric", "Value", "Notes"], C_DARK_BLUE)
+
+    rows = [
+        ("Total lines processed",   total,            "Rows read from input file"),
+        ("Matched lines",           matched_total,    "Lines containing 5+ forward slashes"),
+        ("Unmatched lines",         len(unmatched),   "Lines with fewer than 5 slashes"),
+        ("Distinct segments found", len(matched),     "Unique values between 4th and 5th '/'"),
+        ("Match rate",              "=ROUND(B5/B4*100,2)&\"%\"" if total else "N/A",
+                                    "Percentage of lines that matched the pattern"),
+    ]
+    for r_idx, (label, value, note) in enumerate(rows, 4):
+        bg = C_ALT_GREEN if r_idx % 2 == 0 else "FFFFFF"
+        for col, (val, aln) in enumerate(
+                [(label, _left()), (value, _right()), (note, _left())], 1):
+            c = ws.cell(row=r_idx, column=col, value=val)
+            c.font = _font()
+            c.fill = _fill(bg)
+            c.alignment = aln
+            c.border = BORDER
+
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 50
+
+    # ── Sheet 2: Matched Segments ─────────────────────────────────────────────
+    ws2 = wb.create_sheet("Matched Segments")
+    ws2.freeze_panes = "A2"
+
+    _write_header_row(ws2, 1, ["#", "Segment", "Count", "% of Matched Lines"], C_BLUE)
+
+    for i, (seg, cnt) in enumerate(matched.most_common(), 2):
+        bg  = C_ALT_BLUE if i % 2 == 0 else "FFFFFF"
+        pct = f"=ROUND(C{i}/{matched_total}*100,4)" if matched_total else 0
+        for col, (val, aln) in enumerate(
+                [(i-1, _centre()), (seg, _left()), (cnt, _right()), (pct, _right())], 1):
+            c = ws2.cell(row=i, column=col, value=val)
+            c.font = _font()
+            c.fill = _fill(bg)
+            c.alignment = aln
+            c.border = BORDER
+
+    last_data = 1 + len(matched)
+    totals_row = last_data + 1
+    totals = ["", "TOTAL",
+              f"=SUM(C2:C{last_data})",
+              f"=ROUND(SUM(D2:D{last_data}),2)"]
+    for col, (val, aln) in enumerate(
+            [(totals[0], _centre()), (totals[1], _left()),
+             (totals[2], _right()),  (totals[3], _right())], 1):
+        c = ws2.cell(row=totals_row, column=col, value=val)
+        c.font = _font(bold=True)
+        c.fill = _fill(C_TOTALS)
+        c.alignment = aln
+        c.border = BORDER
+
+    ws2.column_dimensions["A"].width = 8
+    ws2.column_dimensions["B"].width = 55
+    ws2.column_dimensions["C"].width = 14
+    ws2.column_dimensions["D"].width = 22
+
+    # ── Sheet 3: Unmatched Lines ───────────────────────────────────────────────
+    ws3 = wb.create_sheet("Unmatched Lines")
+    ws3.freeze_panes = "A2"
+
+    _write_header_row(ws3, 1, ["#", "Line Number in File", "Line Content"], C_ORANGE)
+
+    for i, (lineno, line) in enumerate(unmatched, 2):
+        bg = C_ALT_ORANGE if i % 2 == 0 else "FFFFFF"
+        for col, (val, aln) in enumerate(
+                [(i-1, _centre()), (lineno, _right()), (line[:500], _left())], 1):
+            c = ws3.cell(row=i, column=col, value=val)
+            c.font = _font()
+            c.fill = _fill(bg)
+            c.alignment = aln
+            c.border = BORDER
+
+    ws3.column_dimensions["A"].width = 8
+    ws3.column_dimensions["B"].width = 20
+    ws3.column_dimensions["C"].width = 100
+
+    wb.save(out_path)
+
+
+# ── GUI ───────────────────────────────────────────────────────────────────────
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Path Segment Analyzer")
+        self.geometry("920x700")
+        self.resizable(True, True)
+        self._build_ui()
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 6}
+
+        top = tk.Frame(self)
+        top.pack(fill="x", **pad)
+        tk.Label(top, text="File:").pack(side="left")
+        self.path_var = tk.StringVar()
+        tk.Entry(top, textvariable=self.path_var, width=62).pack(side="left", padx=4)
+        tk.Button(top, text="Browse…", command=self._browse).pack(side="left")
+        self.run_btn = tk.Button(top, text="Analyse", command=self._run,
+                                 bg="#1976D2", fg="white", width=10)
+        self.run_btn.pack(side="left", padx=8)
+
+        self.progress = ttk.Progressbar(self, mode="determinate", maximum=100)
+        self.progress.pack(fill="x", padx=10)
+        self.status_var = tk.StringVar(value="Ready.")
+        tk.Label(self, textvariable=self.status_var, anchor="w").pack(fill="x", padx=10)
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=10, pady=4)
+
+        f1 = tk.Frame(nb)
+        nb.add(f1, text="Matched segments")
+        cols_m = ("Segment", "Count")
+        self.tree_m = ttk.Treeview(f1, columns=cols_m, show="headings")
+        for c in cols_m:
+            self.tree_m.heading(c, text=c,
+                                command=lambda _c=c: self._sort_tree(self.tree_m, _c))
+            self.tree_m.column(c, width=400 if c == "Segment" else 120, anchor="w")
+        sb_m = ttk.Scrollbar(f1, orient="vertical", command=self.tree_m.yview)
+        self.tree_m.configure(yscrollcommand=sb_m.set)
+        self.tree_m.pack(side="left", fill="both", expand=True)
+        sb_m.pack(side="right", fill="y")
+
+        f2 = tk.Frame(nb)
+        nb.add(f2, text="Unmatched lines")
+        cols_u = ("Line #", "Content")
+        self.tree_u = ttk.Treeview(f2, columns=cols_u, show="headings")
+        self.tree_u.heading("Line #", text="Line #")
+        self.tree_u.heading("Content", text="Content")
+        self.tree_u.column("Line #", width=80, anchor="e")
+        self.tree_u.column("Content", width=800, anchor="w")
+        sb_u = ttk.Scrollbar(f2, orient="vertical", command=self.tree_u.yview)
+        self.tree_u.configure(yscrollcommand=sb_u.set)
+        self.tree_u.pack(side="left", fill="both", expand=True)
+        sb_u.pack(side="right", fill="y")
+
+        bot = tk.Frame(self)
+        bot.pack(fill="x", padx=10, pady=6)
+        self.summary_var = tk.StringVar()
+        tk.Label(bot, textvariable=self.summary_var, anchor="w").pack(side="left")
+        self.export_btn = tk.Button(bot, text="Export Excel report (.xlsx)",
+                                    command=self._export,
+                                    bg="#2E7D32", fg="white", width=26)
+        self.export_btn.pack(side="right")
+
+        self._results = None
+
+    def _browse(self):
+        path = filedialog.askopenfilename(
+            title="Select file",
+            filetypes=[("Text files", "*.txt *.csv *.log *.tsv"), ("All files", "*.*")]
+        )
+        if path:
+            self.path_var.set(path)
+
+    def _run(self):
+        path = self.path_var.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("Error", "Please select a valid file first.")
+            return
+        self.run_btn.config(state="disabled")
+        self.export_btn.config(state="disabled")
+        self.progress["value"] = 0
+        self.status_var.set("Analysing…")
+        self._clear_trees()
+        self._results = None
+
+        def progress_cb(pct):
+            self.after(0, lambda: self._update_progress(pct))
+
+        def done_cb(r):
+            self.after(0, lambda: self._show_results(r))
+
+        threading.Thread(target=analyse_file,
+                         args=(path, progress_cb, done_cb), daemon=True).start()
+
+    def _update_progress(self, pct):
+        self.progress["value"] = pct
+        self.status_var.set(f"Progress: {pct}%")
+
+    def _show_results(self, results):
+        self.run_btn.config(state="normal")
+        self.export_btn.config(state="normal")
+        if "error" in results:
+            messagebox.showerror("Error", results["error"])
+            self.status_var.set("Error.")
+            return
+
+        self._results = results
+        matched: collections.Counter = results["matched"]
+        unmatched: list               = results["unmatched"]
+        total: int                    = results["total"]
+
+        for seg, cnt in matched.most_common():
+            self.tree_m.insert("", "end", values=(seg, cnt))
+
+        display_limit = 10_000
+        for lineno, line in unmatched[:display_limit]:
+            self.tree_u.insert("", "end", values=(lineno, line[:300]))
+        if len(unmatched) > display_limit:
+            self.tree_u.insert("", "end",
+                               values=("…", f"(showing first {display_limit:,} of "
+                                            f"{len(unmatched):,} — export for full list)"))
+
+        self.summary_var.set(
+            f"Total: {total:,}  |  Distinct: {len(matched):,}  |  "
+            f"Matched: {sum(matched.values()):,}  |  Unmatched: {len(unmatched):,}"
+        )
+        self.status_var.set("Done. Ready to export.")
+        self.progress["value"] = 100
+
+    def _sort_tree(self, tree, col):
+        items = [(tree.set(k, col), k) for k in tree.get_children("")]
+        try:
+            items.sort(key=lambda t: int(t[0]), reverse=True)
+        except ValueError:
+            items.sort(key=lambda t: t[0].lower())
+        for idx, (_, k) in enumerate(items):
+            tree.move(k, "", idx)
+
+    def _clear_trees(self):
+        for tree in (self.tree_m, self.tree_u):
+            tree.delete(*tree.get_children())
+        self.summary_var.set("")
+
+    def _export(self):
+        if not self._results:
+            messagebox.showinfo("Nothing to export", "Run an analysis first.")
+            return
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = filedialog.asksaveasfilename(
+            title="Save Excel report",
+            defaultextension=".xlsx",
+            initialfile=f"path_analysis_{stamp}.xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+
+        self.export_btn.config(state="disabled")
+        self.status_var.set("Generating Excel report…")
+
+        def do_export():
+            try:
+                export_excel(path, self._results)
+                self.after(0, lambda: self._export_done(path, None))
+            except Exception as exc:
+                self.after(0, lambda: self._export_done(path, str(exc)))
+
+        threading.Thread(target=do_export, daemon=True).start()
+
+    def _export_done(self, path, error):
+        self.export_btn.config(state="normal")
+        if error:
+            messagebox.showerror("Export failed", error)
+            self.status_var.set("Export failed.")
+        else:
+            self.status_var.set(f"Exported → {os.path.basename(path)}")
+            messagebox.showinfo("Export complete", f"Excel report saved to:\n{path}")
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
