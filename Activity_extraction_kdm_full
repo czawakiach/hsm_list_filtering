@@ -35,6 +35,16 @@ def extract_segment(line: str) -> str | None:
     return None
 
 
+def extract_country(line: str) -> str:
+    """Return the 3-letter country code after the 7th slash, or '' if not present."""
+    parts = line.split("/")
+    if len(parts) >= 9:          # at least 8 slashes → parts[8] exists after 8th slash
+        candidate = parts[8]
+        if len(candidate) == 3 and candidate.isalpha():
+            return candidate.upper()
+    return ""
+
+
 def extract_kdm_code(line: str) -> tuple[str, str] | None:
     """
     From a KDM activity line return (code, full_line).
@@ -83,6 +93,7 @@ def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str]]:
 
 def analyse_file(path: str, progress_cb, done_cb):
     matched: collections.Counter = collections.Counter()
+    seg_country: dict[str, set] = {}   # {seg: set of country codes seen}
     unmatched: list[tuple[int, str]] = []
     try:
         size = os.path.getsize(path)
@@ -95,13 +106,17 @@ def analyse_file(path: str, progress_cb, done_cb):
                 seg = extract_segment(line)
                 if seg is not None:
                     matched[seg] += 1
+                    country = extract_country(line)
+                    if country:
+                        seg_country.setdefault(seg, set()).add(country)
                 else:
                     unmatched.append((lineno, line))
                 if lineno % 10_000 == 0:
                     pct = min(int(bytes_read / size * 100), 99) if size else 0
                     progress_cb(pct)
         progress_cb(100)
-        done_cb({"matched": matched, "unmatched": unmatched, "total": lineno})
+        done_cb({"matched": matched, "seg_country": seg_country,
+                 "unmatched": unmatched, "total": lineno})
     except Exception as exc:
         done_cb({"error": str(exc)})
 
@@ -207,6 +222,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
     matched_total                 = sum(matched.values())
 
     exact_map, normal_map = kdm
+    seg_country: dict = results.get("seg_country", {})
     segments_ranked = [seg for seg, _ in matched.most_common()]
     kdm_lookup      = match_against_kdm(segments_ranked, exact_map, normal_map)
 
@@ -311,7 +327,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
         ("TOTAL",  _left()),
         (f"=SUM(C2:C{last_data})", _right()),
         (f"=ROUND(SUM(D2:D{last_data}),2)", _right()),
-        ("", _left()), ("", _left()), ("", _centre()),
+        ("", _left()), ("", _left()), ("", _centre()), ("", _centre()),
     ]
     for col, (val, aln) in enumerate(totals, 1):
         c = ws2.cell(row=totals_row, column=col, value=val)
@@ -327,6 +343,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
     ws2.column_dimensions["E"].width = 28
     ws2.column_dimensions["F"].width = 38
     ws2.column_dimensions["G"].width = 18
+    ws2.column_dimensions["H"].width = 18
 
     # ── Sheet 3: Unmatched Lines ───────────────────────────────────────────────
     ws3 = wb.create_sheet("Unmatched Lines")
@@ -402,10 +419,10 @@ class App(tk.Tk):
         # Tab 1 — matched segments
         f1 = tk.Frame(nb)
         nb.add(f1, text="Matched segments")
-        cols_m = ("Segment", "Count", "KDM Match", "Full KDM Name", "Identified")
+        cols_m = ("Segment", "Count", "KDM Match", "Full KDM Name", "Identified", "Country")
         self.tree_m = ttk.Treeview(f1, columns=cols_m, show="headings")
         widths_m    = {"Segment": 220, "Count": 80, "KDM Match": 160,
-                       "Full KDM Name": 220, "Identified": 110}
+                       "Full KDM Name": 220, "Identified": 110, "Country": 80}
         for c in cols_m:
             self.tree_m.heading(c, text=c,
                                 command=lambda _c=c: self._sort_tree(self.tree_m, _c))
@@ -508,10 +525,12 @@ class App(tk.Tk):
             [seg for seg, _ in matched.most_common()], self._kdm[0], self._kdm[1]
         )
 
+        seg_country_gui = results.get("seg_country", {})
         for seg, cnt in matched.most_common():
             kdm_code, kdm_full, method = kdm_lookup.get(seg, ("", "", ""))
+            countries = ", ".join(sorted(seg_country_gui.get(seg, set())))
             self.tree_m.insert("", "end",
-                               values=(seg, cnt, kdm_code, kdm_full, method))
+                               values=(seg, cnt, kdm_code, kdm_full, method, countries))
 
         display_limit = 10_000
         for lineno, line in unmatched[:display_limit]:
