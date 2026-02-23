@@ -286,7 +286,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
 
     headers = [
         "#", "Segment", "Count", "% of Matched Lines",
-        "Matched KDM Activity", "Full KDM Activity Name", "Identified"
+        "Matched KDM Activity", "Full KDM Activity Name", "Identified", "Country"
     ]
     _hdr(ws2, 1, headers, C_BLUE)
 
@@ -304,14 +304,16 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
             bg = C_ALT_BLUE if i % 2 == 0 else "FFFFFF"
 
         pct = f"=ROUND(C{i}/{matched_total}*100,4)" if matched_total else 0
+        countries = ", ".join(sorted(seg_country.get(seg, set())))
         row_vals = [
-            (i - 1,    _centre()),
-            (seg,      _left()),
-            (cnt,      _right()),
-            (pct,      _right()),
-            (kdm_code, _left()),
-            (kdm_full, _left()),
-            (method,   _centre()),
+            (i - 1,     _centre()),
+            (seg,       _left()),
+            (cnt,       _right()),
+            (pct,       _right()),
+            (kdm_code,  _left()),
+            (kdm_full,  _left()),
+            (method,    _centre()),
+            (countries, _centre()),
         ]
         for col, (val, aln) in enumerate(row_vals, 1):
             c = ws2.cell(row=i, column=col, value=val)
