@@ -35,13 +35,16 @@ def extract_segment(line: str) -> str | None:
     return None
 
 
-def extract_country(line: str) -> str:
-    """Return the 3-letter country code after the 7th slash, or '' if not present."""
-    parts = line.split("/")
-    if len(parts) >= 9:          # at least 8 slashes → parts[8] exists after 8th slash
-        candidate = parts[8]
-        if len(candidate) == 3 and candidate.isalpha():
-            return candidate.upper()
+def extract_kdm_country(line: str) -> str:
+    """
+    Extract country code from a KDM activity line.
+    Pattern: ./af/AO-ANGOLA/2D/AWG97_KDM
+    Country = parts[2]  (between 2nd and 3rd slash).
+    Returns the full token as-is, or '' if the line doesn't have enough parts.
+    """
+    parts = line.strip().split("/")
+    if len(parts) >= 4 and parts[2]:   # parts[2] = between 2nd and 3rd slash
+        return parts[2]
     return ""
 
 
@@ -67,14 +70,16 @@ def _normalise(s: str) -> str:
     return s.replace("-", "_")
 
 
-def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str]]:
+def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """
     Return:
       exact_map   : {original_code: full_line}
       normal_map  : {normalised_code: full_line}  — for fuzzy dash/underscore matching
+      country_map : {full_line: country_code}      — country between 2nd and 3rd slash
     """
-    exact_map:  dict[str, str] = {}
-    normal_map: dict[str, str] = {}
+    exact_map:   dict[str, str] = {}
+    normal_map:  dict[str, str] = {}
+    country_map: dict[str, str] = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             for raw in fh:
@@ -84,16 +89,18 @@ def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str]]:
                     if code:
                         exact_map[code] = full_line
                         normal_map[_normalise(code)] = full_line
+                        country = extract_kdm_country(full_line)
+                        if country:
+                            country_map[full_line] = country
     except Exception:
         pass
-    return exact_map, normal_map
+    return exact_map, normal_map, country_map
 
 
 # ── main file analysis ────────────────────────────────────────────────────────
 
 def analyse_file(path: str, progress_cb, done_cb):
     matched: collections.Counter = collections.Counter()
-    seg_country: dict[str, set] = {}   # {seg: set of country codes seen}
     unmatched: list[tuple[int, str]] = []
     try:
         size = os.path.getsize(path)
@@ -106,17 +113,13 @@ def analyse_file(path: str, progress_cb, done_cb):
                 seg = extract_segment(line)
                 if seg is not None:
                     matched[seg] += 1
-                    country = extract_country(line)
-                    if country:
-                        seg_country.setdefault(seg, set()).add(country)
                 else:
                     unmatched.append((lineno, line))
                 if lineno % 10_000 == 0:
                     pct = min(int(bytes_read / size * 100), 99) if size else 0
                     progress_cb(pct)
         progress_cb(100)
-        done_cb({"matched": matched, "seg_country": seg_country,
-                 "unmatched": unmatched, "total": lineno})
+        done_cb({"matched": matched, "unmatched": unmatched, "total": lineno})
     except Exception as exc:
         done_cb({"error": str(exc)})
 
@@ -221,8 +224,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
     total: int                    = results["total"]
     matched_total                 = sum(matched.values())
 
-    exact_map, normal_map = kdm
-    seg_country: dict = results.get("seg_country", {})
+    exact_map, normal_map, country_map = kdm
     segments_ranked = [seg for seg, _ in matched.most_common()]
     kdm_lookup      = match_against_kdm(segments_ranked, exact_map, normal_map)
 
@@ -304,7 +306,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
             bg = C_ALT_BLUE if i % 2 == 0 else "FFFFFF"
 
         pct = f"=ROUND(C{i}/{matched_total}*100,4)" if matched_total else 0
-        countries = ", ".join(sorted(seg_country.get(seg, set())))
+        country = country_map.get(kdm_full, "") if kdm_full else ""
         row_vals = [
             (i - 1,     _centre()),
             (seg,       _left()),
@@ -313,7 +315,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
             (kdm_code,  _left()),
             (kdm_full,  _left()),
             (method,    _centre()),
-            (countries, _centre()),
+            (country,   _centre()),
         ]
         for col, (val, aln) in enumerate(row_vals, 1):
             c = ws2.cell(row=i, column=col, value=val)
@@ -379,7 +381,7 @@ class App(tk.Tk):
         self.geometry("960x740")
         self.resizable(True, True)
         self._results  = None
-        self._kdm      = ({}, {})  # (exact_map, normal_map)
+        self._kdm      = ({}, {}, {})  # (exact_map, normal_map, country_map)
         self._build_ui()
 
     # ── layout ────────────────────────────────────────────────────────────────
@@ -527,12 +529,12 @@ class App(tk.Tk):
             [seg for seg, _ in matched.most_common()], self._kdm[0], self._kdm[1]
         )
 
-        seg_country_gui = results.get("seg_country", {})
+        country_map_gui = self._kdm[2]
         for seg, cnt in matched.most_common():
             kdm_code, kdm_full, method = kdm_lookup.get(seg, ("", "", ""))
-            countries = ", ".join(sorted(seg_country_gui.get(seg, set())))
+            country = country_map_gui.get(kdm_full, "") if kdm_full else ""
             self.tree_m.insert("", "end",
-                               values=(seg, cnt, kdm_code, kdm_full, method, countries))
+                               values=(seg, cnt, kdm_code, kdm_full, method, country))
 
         display_limit = 10_000
         for lineno, line in unmatched[:display_limit]:
@@ -587,7 +589,7 @@ class App(tk.Tk):
         self.export_btn.config(state="disabled")
         self.status_var.set("Generating Excel report…")
 
-        kdm_snapshot = (dict(self._kdm[0]), dict(self._kdm[1]))
+        kdm_snapshot = (dict(self._kdm[0]), dict(self._kdm[1]), dict(self._kdm[2]))
 
         def do_export():
             try:
