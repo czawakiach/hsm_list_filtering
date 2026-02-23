@@ -1,0 +1,620 @@
+"""
+Path Segment Analyzer
+─────────────────────
+UD file    : list of strings; extract the token that follows a HH:MM time pattern
+             and precedes the next forward slash.
+             e.g. "15:19 98BUK-2D/985..." → "98BUK-2D"
+             Lines without this pattern go to Unmatched.
+KDM file   : extract after last slash, strip "_KDM" suffix → activity code.
+Matching   : auto-match each distinct segment from the UD file against KDM codes.
+Report     : 3-sheet Excel  (Summary | Matched Segments + KDM columns | Unmatched Lines)
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import collections
+import os
+from datetime import datetime
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+
+# ── extraction helpers ────────────────────────────────────────────────────────
+
+def extract_segment(line: str) -> str | None:
+    """
+    Extract the token that follows a HH:MM time pattern and precedes the next '/'.
+    e.g. "15:19 98BUK-2D/985..."  →  "98BUK-2D"
+    The time pattern is HH:MM (digits only, colon-separated) anywhere in the line,
+    followed by optional whitespace, then the token up to the next slash.
+    Returns None if the pattern is not found (line goes to Unmatched).
+    """
+    import re
+    m = re.search(r'\b\d{1,2}:\d{2}\s+(\S+?)/', line)
+    if m:
+        return m.group(1)
+    return None
+
+
+def extract_kdm_country(line: str) -> str:
+    """
+    Extract country code from a KDM activity line.
+    Pattern: ./af/AO-ANGOLA/2D/AWG97_KDM
+    Country = parts[2]  (between 2nd and 3rd slash).
+    Returns the full token as-is, or '' if the line doesn't have enough parts.
+    """
+    parts = line.strip().split("/")
+    if len(parts) >= 4 and parts[2]:   # parts[2] = between 2nd and 3rd slash
+        return parts[2]
+    return ""
+
+
+def extract_kdm_code(line: str) -> tuple[str, str] | None:
+    """
+    From a KDM activity line return (code, full_line).
+    full_line = the entire original line (stripped), used as the full name in the report.
+    code      = substring after the last slash, with '_KDM' / '-KDM' suffix removed.
+    Returns None if the line is empty.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    idx = line.rfind("/")
+    suffix = line[idx + 1:] if idx != -1 else line
+    import re
+    code = re.sub(r'[_\-]KDM$', '', suffix, flags=re.IGNORECASE)
+    return code, line          # full_line is the complete original string
+
+
+def _normalise(s: str) -> str:
+    """Collapse dashes and underscores to a single canonical character for comparison."""
+    return s.replace("-", "_")
+
+
+def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """
+    Return:
+      exact_map   : {original_code: full_line}
+      normal_map  : {normalised_code: full_line}  — for fuzzy dash/underscore matching
+      country_map : {full_line: country_code}      — country between 2nd and 3rd slash
+    """
+    exact_map:   dict[str, str] = {}
+    normal_map:  dict[str, str] = {}
+    country_map: dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                parsed = extract_kdm_code(raw.rstrip("\n\r"))
+                if parsed:
+                    code, full_line = parsed
+                    if code:
+                        exact_map[code] = full_line
+                        normal_map[_normalise(code)] = full_line
+                        country = extract_kdm_country(full_line)
+                        if country:
+                            country_map[full_line] = country
+    except Exception:
+        pass
+    return exact_map, normal_map, country_map
+
+
+# ── main file analysis ────────────────────────────────────────────────────────
+
+def analyse_file(path: str, progress_cb, done_cb):
+    matched: collections.Counter = collections.Counter()
+    unmatched: list[tuple[int, str]] = []
+    try:
+        size = os.path.getsize(path)
+        bytes_read = 0
+        lineno = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for lineno, raw in enumerate(fh, 1):
+                line = raw.rstrip("\n\r")
+                bytes_read += len(raw.encode("utf-8", errors="replace"))
+                seg = extract_segment(line)
+                if seg is not None:
+                    matched[seg] += 1
+                else:
+                    unmatched.append((lineno, line))
+                if lineno % 10_000 == 0:
+                    pct = min(int(bytes_read / size * 100), 99) if size else 0
+                    progress_cb(pct)
+        progress_cb(100)
+        done_cb({"matched": matched, "unmatched": unmatched, "total": lineno})
+    except Exception as exc:
+        done_cb({"error": str(exc)})
+
+
+# ── KDM matching ──────────────────────────────────────────────────────────────
+
+import re as _re
+_DIMENSION_SUFFIX = _re.compile(r'[-_][23]D$', _re.IGNORECASE)
+
+
+def _lookup(seg: str, exact_map: dict, normal_map: dict):
+    """Try exact then normalised lookup. Return (orig_code, full_line) or None."""
+    if seg in exact_map:
+        return seg, exact_map[seg]
+    norm = _normalise(seg)
+    if norm in normal_map:
+        full_line = normal_map[norm]
+        orig_code = next((k for k, v in exact_map.items() if v == full_line), seg)
+        return orig_code, full_line
+    return None
+
+
+def match_against_kdm(
+    segments: list[str],
+    exact_map: dict[str, str],
+    normal_map: dict[str, str],
+) -> dict[str, tuple[str, str, str]]:
+    """
+    Three-tier KDM matching per segment:
+    1. Exact match                          → "Automatically"
+    2. Normalised match (- == _)            → "Automatically"
+    3. Strip trailing -2D/-3D/_2D/_3D
+       then repeat 1+2                      → "Semi-automatically"
+    Returns {segment: (matched_code, full_line, method)}
+    """
+    result: dict[str, tuple[str, str, str]] = {}
+    for seg in segments:
+        hit = _lookup(seg, exact_map, normal_map)
+        if hit:
+            result[seg] = (hit[0], hit[1], "Automatically")
+            continue
+
+        stripped = _DIMENSION_SUFFIX.sub('', seg)
+        if stripped != seg:
+            hit2 = _lookup(stripped, exact_map, normal_map)
+            if hit2:
+                result[seg] = (hit2[0], hit2[1], "Semi-automatically")
+                continue
+
+        result[seg] = ("", "", "")
+    return result
+
+
+# ── Excel styling helpers ─────────────────────────────────────────────────────
+
+FONT_NAME    = "Arial"
+C_DARK_BLUE  = "0D47A1"
+C_BLUE       = "1976D2"
+C_TEAL       = "00695C"
+C_ORANGE     = "E65100"
+C_ALT_BLUE   = "E3F2FD"
+C_ALT_GREEN  = "E8F5E9"
+C_ALT_ORANGE = "FFF3E0"
+C_ALT_TEAL   = "E0F2F1"
+C_TOTALS     = "CFD8DC"
+C_AUTO_MATCH = "C8E6C9"   # light green  — automatically matched rows
+C_SEMI_MATCH = "FFF9C4"   # light yellow — semi-automatically matched rows
+
+thin   = Side(style="thin", color="BDBDBD")
+BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+
+def _font(bold=False, size=10, color="000000"):
+    return Font(name=FONT_NAME, bold=bold, size=size, color=color)
+
+def _fill(hex_color):
+    return PatternFill("solid", fgColor=hex_color)
+
+def _centre():
+    return Alignment(horizontal="center", vertical="center")
+
+def _left():
+    return Alignment(horizontal="left", vertical="center")
+
+def _right():
+    return Alignment(horizontal="right", vertical="center")
+
+def _hdr(ws, row_num, labels, bg_hex):
+    for col, label in enumerate(labels, 1):
+        c = ws.cell(row=row_num, column=col, value=label)
+        c.font      = _font(bold=True, size=11, color="FFFFFF")
+        c.fill      = _fill(bg_hex)
+        c.alignment = _centre()
+        c.border    = BORDER
+
+
+# ── Excel export ──────────────────────────────────────────────────────────────
+
+def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
+    matched: collections.Counter = results["matched"]
+    unmatched: list               = results["unmatched"]
+    total: int                    = results["total"]
+    matched_total                 = sum(matched.values())
+
+    exact_map, normal_map, country_map = kdm
+    segments_ranked = [seg for seg, _ in matched.most_common()]
+    kdm_lookup      = match_against_kdm(segments_ranked, exact_map, normal_map)
+
+    wb = Workbook()
+
+    # ── Sheet 1: Summary ─────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "Summary"
+
+    ws.merge_cells("A1:C1")
+    t = ws["A1"]
+    t.value     = "Path Segment Analysis Report"
+    t.font      = _font(bold=True, size=14, color="FFFFFF")
+    t.fill      = _fill(C_DARK_BLUE)
+    t.alignment = _centre()
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells("A2:C2")
+    d = ws["A2"]
+    d.value     = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    d.font      = _font(size=9, color="555555")
+    d.alignment = _centre()
+
+    kdm_loaded = len(exact_map)
+    auto_matched = sum(1 for v in kdm_lookup.values() if v[2] == "Automatically")
+    semi_matched = sum(1 for v in kdm_lookup.values() if v[2] == "Semi-automatically")
+
+    _hdr(ws, 3, ["Metric", "Value", "Notes"], C_DARK_BLUE)
+    summary_rows = [
+        ("Total lines processed",       total,          "Rows read from input file"),
+        ("Matched lines",               matched_total,  "Lines with 4 or 5+ forward slashes"),
+        ("Unmatched lines",             len(unmatched), "Lines with fewer than 4 slashes"),
+        ("Distinct segments found",     len(matched),   "Unique extracted values"),
+        ("Match rate",
+         f"=ROUND(B5/B4*100,2)&\"%\"" if total else "N/A",
+         "Percentage of lines that yielded a segment"),
+        ("KDM activities loaded",       kdm_loaded,     "Entries read from KDM file"),
+        ("Auto-matched to KDM",         auto_matched,   "Segments matched automatically"),
+        ("Semi-auto matched to KDM",    semi_matched,   "Segments matched after stripping -2D/-3D suffix"),
+        ("Pending manual review",
+         len(matched) - auto_matched - semi_matched,
+         "Segments with no match yet — fill in Excel"),
+    ]
+    for r_idx, (label, value, note) in enumerate(summary_rows, 4):
+        bg = C_ALT_GREEN if r_idx % 2 == 0 else "FFFFFF"
+        for col, (val, aln) in enumerate(
+                [(label, _left()), (value, _right()), (note, _left())], 1):
+            c = ws.cell(row=r_idx, column=col, value=val)
+            c.font = _font()
+            c.fill = _fill(bg)
+            c.alignment = aln
+            c.border = BORDER
+
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 52
+
+    # ── Sheet 2: Matched Segments ─────────────────────────────────────────────
+    ws2 = wb.create_sheet("Matched Segments")
+    ws2.freeze_panes = "A2"
+
+    headers = [
+        "#", "Segment", "Count", "% of Matched Lines",
+        "Matched KDM Activity", "Full KDM Activity Name", "Identified", "Country"
+    ]
+    _hdr(ws2, 1, headers, C_BLUE)
+
+    for i, (seg, cnt) in enumerate(matched.most_common(), 2):
+        kdm_code, kdm_full, method = kdm_lookup.get(seg, ("", "", ""))
+        is_auto = method == "Automatically"
+
+        is_semi = method == "Semi-automatically"
+        # green=auto, yellow=semi-auto, alternating blue/white=no match
+        if is_auto:
+            bg = C_AUTO_MATCH
+        elif is_semi:
+            bg = C_SEMI_MATCH
+        else:
+            bg = C_ALT_BLUE if i % 2 == 0 else "FFFFFF"
+
+        pct = f"=ROUND(C{i}/{matched_total}*100,4)" if matched_total else 0
+        country = country_map.get(kdm_full, "") if kdm_full else ""
+        row_vals = [
+            (i - 1,     _centre()),
+            (seg,       _left()),
+            (cnt,       _right()),
+            (pct,       _right()),
+            (kdm_code,  _left()),
+            (kdm_full,  _left()),
+            (method,    _centre()),
+            (country,   _centre()),
+        ]
+        for col, (val, aln) in enumerate(row_vals, 1):
+            c = ws2.cell(row=i, column=col, value=val)
+            c.font      = _font()
+            c.fill      = _fill(bg)
+            c.alignment = aln
+            c.border    = BORDER
+
+    last_data  = 1 + len(matched)
+    totals_row = last_data + 1
+    totals = [
+        ("",       _centre()),
+        ("TOTAL",  _left()),
+        (f"=SUM(C2:C{last_data})", _right()),
+        (f"=ROUND(SUM(D2:D{last_data}),2)", _right()),
+        ("", _left()), ("", _left()), ("", _centre()), ("", _centre()),
+    ]
+    for col, (val, aln) in enumerate(totals, 1):
+        c = ws2.cell(row=totals_row, column=col, value=val)
+        c.font      = _font(bold=True)
+        c.fill      = _fill(C_TOTALS)
+        c.alignment = aln
+        c.border    = BORDER
+
+    ws2.column_dimensions["A"].width = 8
+    ws2.column_dimensions["B"].width = 40
+    ws2.column_dimensions["C"].width = 12
+    ws2.column_dimensions["D"].width = 22
+    ws2.column_dimensions["E"].width = 28
+    ws2.column_dimensions["F"].width = 38
+    ws2.column_dimensions["G"].width = 18
+    ws2.column_dimensions["H"].width = 18
+
+    # ── Sheet 3: Unmatched Lines ───────────────────────────────────────────────
+    ws3 = wb.create_sheet("Unmatched Lines")
+    ws3.freeze_panes = "A2"
+
+    _hdr(ws3, 1, ["#", "Line Number in File", "Line Content"], C_ORANGE)
+
+    for i, (lineno, line) in enumerate(unmatched, 2):
+        bg = C_ALT_ORANGE if i % 2 == 0 else "FFFFFF"
+        for col, (val, aln) in enumerate(
+                [(i - 1, _centre()), (lineno, _right()), (line[:500], _left())], 1):
+            c = ws3.cell(row=i, column=col, value=val)
+            c.font      = _font()
+            c.fill      = _fill(bg)
+            c.alignment = aln
+            c.border    = BORDER
+
+    ws3.column_dimensions["A"].width = 8
+    ws3.column_dimensions["B"].width = 20
+    ws3.column_dimensions["C"].width = 100
+
+    wb.save(out_path)
+
+
+# ── GUI ───────────────────────────────────────────────────────────────────────
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Path Segment Analyzer")
+        self.geometry("960x740")
+        self.resizable(True, True)
+        self._results  = None
+        self._kdm      = ({}, {}, {})  # (exact_map, normal_map, country_map)
+        self._build_ui()
+
+    # ── layout ────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 4}
+
+        # ── Main file row ──
+        row1 = tk.Frame(self)
+        row1.pack(fill="x", **pad)
+        tk.Label(row1, text="UD file:", width=12, anchor="w").pack(side="left")
+        self.path_var = tk.StringVar()
+        tk.Entry(row1, textvariable=self.path_var, width=58).pack(side="left", padx=4)
+        tk.Button(row1, text="Browse…", command=self._browse_main).pack(side="left")
+        self.run_btn = tk.Button(row1, text="Analyse", command=self._run,
+                                 bg="#1976D2", fg="white", width=10)
+        self.run_btn.pack(side="left", padx=8)
+
+        # ── KDM file row ──
+        row2 = tk.Frame(self)
+        row2.pack(fill="x", **pad)
+        tk.Label(row2, text="KDM activities:", width=12, anchor="w").pack(side="left")
+        self.kdm_var = tk.StringVar()
+        tk.Entry(row2, textvariable=self.kdm_var, width=58).pack(side="left", padx=4)
+        tk.Button(row2, text="Browse…", command=self._browse_kdm).pack(side="left")
+        self.kdm_status = tk.Label(row2, text="(not loaded)", fg="gray")
+        self.kdm_status.pack(side="left", padx=8)
+
+        # ── Progress ──
+        self.progress = ttk.Progressbar(self, mode="determinate", maximum=100)
+        self.progress.pack(fill="x", padx=10, pady=(4, 0))
+        self.status_var = tk.StringVar(value="Ready.")
+        tk.Label(self, textvariable=self.status_var, anchor="w").pack(fill="x", padx=10)
+
+        # ── Notebook ──
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=10, pady=4)
+
+        # Tab 1 — matched segments
+        f1 = tk.Frame(nb)
+        nb.add(f1, text="Matched segments")
+        cols_m = ("Segment", "Count", "KDM Match", "Full KDM Name", "Identified", "Country")
+        self.tree_m = ttk.Treeview(f1, columns=cols_m, show="headings")
+        widths_m    = {"Segment": 220, "Count": 80, "KDM Match": 160,
+                       "Full KDM Name": 220, "Identified": 110, "Country": 80}
+        for c in cols_m:
+            self.tree_m.heading(c, text=c,
+                                command=lambda _c=c: self._sort_tree(self.tree_m, _c))
+            self.tree_m.column(c, width=widths_m[c], anchor="w")
+        sb_m = ttk.Scrollbar(f1, orient="vertical", command=self.tree_m.yview)
+        self.tree_m.configure(yscrollcommand=sb_m.set)
+        self.tree_m.pack(side="left", fill="both", expand=True)
+        sb_m.pack(side="right", fill="y")
+
+        # Tab 2 — unmatched lines
+        f2 = tk.Frame(nb)
+        nb.add(f2, text="Unmatched lines")
+        cols_u = ("Line #", "Content")
+        self.tree_u = ttk.Treeview(f2, columns=cols_u, show="headings")
+        self.tree_u.heading("Line #", text="Line #")
+        self.tree_u.heading("Content", text="Content")
+        self.tree_u.column("Line #", width=80, anchor="e")
+        self.tree_u.column("Content", width=860, anchor="w")
+        sb_u = ttk.Scrollbar(f2, orient="vertical", command=self.tree_u.yview)
+        self.tree_u.configure(yscrollcommand=sb_u.set)
+        self.tree_u.pack(side="left", fill="both", expand=True)
+        sb_u.pack(side="right", fill="y")
+
+        # ── Bottom bar ──
+        bot = tk.Frame(self)
+        bot.pack(fill="x", padx=10, pady=6)
+        self.summary_var = tk.StringVar()
+        tk.Label(bot, textvariable=self.summary_var, anchor="w").pack(side="left")
+        self.export_btn = tk.Button(bot, text="Export Excel report (.xlsx)",
+                                    command=self._export,
+                                    bg="#2E7D32", fg="white", width=26)
+        self.export_btn.pack(side="right")
+
+    # ── browse ────────────────────────────────────────────────────────────────
+
+    def _browse_main(self):
+        path = filedialog.askopenfilename(
+            title="Select UD input file",
+            filetypes=[("Text files", "*.txt *.csv *.log *.tsv"), ("All files", "*.*")]
+        )
+        if path:
+            self.path_var.set(path)
+
+    def _browse_kdm(self):
+        path = filedialog.askopenfilename(
+            title="Select KDM activities file",
+            filetypes=[("Text files", "*.txt *.csv *.log *.tsv"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        self.kdm_var.set(path)
+        self._kdm = load_kdm_file(path)
+        n = len(self._kdm[0])
+        self.kdm_status.config(
+            text=f"✓ {n} activities loaded",
+            fg="#2E7D32" if n else "red"
+        )
+
+    # ── analyse ───────────────────────────────────────────────────────────────
+
+    def _run(self):
+        path = self.path_var.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showerror("Error", "Please select a valid main file first.")
+            return
+        self.run_btn.config(state="disabled")
+        self.export_btn.config(state="disabled")
+        self.progress["value"] = 0
+        self.status_var.set("Analysing…")
+        self._clear_trees()
+        self._results = None
+
+        def progress_cb(pct):
+            self.after(0, lambda: self._update_progress(pct))
+
+        def done_cb(r):
+            self.after(0, lambda: self._show_results(r))
+
+        threading.Thread(target=analyse_file,
+                         args=(path, progress_cb, done_cb), daemon=True).start()
+
+    def _update_progress(self, pct):
+        self.progress["value"] = pct
+        self.status_var.set(f"Progress: {pct}%")
+
+    def _show_results(self, results):
+        self.run_btn.config(state="normal")
+        self.export_btn.config(state="normal")
+        if "error" in results:
+            messagebox.showerror("Error", results["error"])
+            self.status_var.set("Error.")
+            return
+
+        self._results = results
+        matched: collections.Counter = results["matched"]
+        unmatched: list               = results["unmatched"]
+        total: int                    = results["total"]
+
+        kdm_lookup = match_against_kdm(
+            [seg for seg, _ in matched.most_common()], self._kdm[0], self._kdm[1]
+        )
+
+        country_map_gui = self._kdm[2]
+        for seg, cnt in matched.most_common():
+            kdm_code, kdm_full, method = kdm_lookup.get(seg, ("", "", ""))
+            country = country_map_gui.get(kdm_full, "") if kdm_full else ""
+            self.tree_m.insert("", "end",
+                               values=(seg, cnt, kdm_code, kdm_full, method, country))
+
+        display_limit = 10_000
+        for lineno, line in unmatched[:display_limit]:
+            self.tree_u.insert("", "end", values=(lineno, line[:300]))
+        if len(unmatched) > display_limit:
+            self.tree_u.insert("", "end",
+                               values=("…", f"(showing first {display_limit:,} of "
+                                            f"{len(unmatched):,} — export for full list)"))
+
+        auto = sum(1 for v in kdm_lookup.values() if v[2] == "Automatically")
+        self.summary_var.set(
+            f"Total: {total:,}  |  Distinct: {len(matched):,}  |  "
+            f"Matched: {sum(matched.values()):,}  |  Unmatched: {len(unmatched):,}  |  "
+            f"KDM auto-matched: {auto}"
+        )
+        self.status_var.set("Done. Ready to export.")
+        self.progress["value"] = 100
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _sort_tree(self, tree, col):
+        items = [(tree.set(k, col), k) for k in tree.get_children("")]
+        try:
+            items.sort(key=lambda t: int(t[0]), reverse=True)
+        except ValueError:
+            items.sort(key=lambda t: t[0].lower())
+        for idx, (_, k) in enumerate(items):
+            tree.move(k, "", idx)
+
+    def _clear_trees(self):
+        for tree in (self.tree_m, self.tree_u):
+            tree.delete(*tree.get_children())
+        self.summary_var.set("")
+
+    # ── export ────────────────────────────────────────────────────────────────
+
+    def _export(self):
+        if not self._results:
+            messagebox.showinfo("Nothing to export", "Run an analysis first.")
+            return
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = filedialog.asksaveasfilename(
+            title="Save Excel report",
+            defaultextension=".xlsx",
+            initialfile=f"path_analysis_{stamp}.xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+
+        self.export_btn.config(state="disabled")
+        self.status_var.set("Generating Excel report…")
+
+        kdm_snapshot = (dict(self._kdm[0]), dict(self._kdm[1]), dict(self._kdm[2]))
+
+        def do_export():
+            try:
+                export_excel(path, self._results, kdm_snapshot)
+                self.after(0, lambda: self._export_done(path, None))
+            except Exception as exc:
+                self.after(0, lambda: self._export_done(path, str(exc)))
+
+        threading.Thread(target=do_export, daemon=True).start()
+
+    def _export_done(self, path, error):
+        self.export_btn.config(state="normal")
+        if error:
+            messagebox.showerror("Export failed", error)
+            self.status_var.set("Export failed.")
+        else:
+            self.status_var.set(f"Exported → {os.path.basename(path)}")
+            messagebox.showinfo("Export complete", f"Excel report saved to:\n{path}")
+
+
+# ── entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
