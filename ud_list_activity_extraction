@@ -23,19 +23,59 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ── extraction helpers ────────────────────────────────────────────────────────
 
+
+# ── country names that may appear in place of the activity token ─────────────
+_COUNTRY_NAMES: set[str] = {
+    "philipines", "yemen", "gabon", "papua_new_guinea", "thailand",
+    "guinea-bissau", "congo", "indonesia", "tanzania", "mauritania",
+    "liberia", "south_africa", "sierra_leone", "angola", "senegal",
+    "malaysia", "morocco", "portugal", "united_arab_emirates", "vietnam",
+    "equatorial_guinea", "china", "nigeria", "korea", "spain", "malta",
+    "bahrain", "israel", "lebanon", "pakistan", "jordan",
+    "makassar-indonesia", "brunei", "burundi", "india", "russia", "libya",
+    "egypt", "tunisia", "saudi_arabia", "netherlands", "ghana", "kenya",
+    "benin", "oman", "ukraine", "yugoslavia", "georgia", "myanmar", "malawi",
+}
+
+
 def extract_segment(line: str) -> str | None:
     """
-    Extract the token that follows a HH:MM time pattern and precedes the next '/'.
-    e.g. "15:19 98BUK-2D/985..."  →  "98BUK-2D"
-    The time pattern is HH:MM (digits only, colon-separated) anywhere in the line,
-    followed by optional whitespace, then the token up to the next slash.
-    Returns None if the pattern is not found (line goes to Unmatched).
+    1. Find a HH:MM time pattern in the line.
+    2. Extract the token immediately after it (up to the next '/').
+    3. If that token is a country name (case-insensitive, dash/underscore
+       insensitive), skip it and take the token between the NEXT two slashes.
+    4. Returns None if no time pattern found, or not enough tokens after it.
+
+    Examples:
+      "15:19 98BUK-2D/985..."          → "98BUK-2D"
+      "23:42 Malaysia/Tapir-3D/mig..." → "Tapir-3D"
     """
     import re
-    m = re.search(r'\b\d{1,2}:\d{2}\s+(\S+?)/', line)
-    if m:
-        return m.group(1)
-    return None
+    m = re.search(r'\b\d{1,2}:\d{2}\s+(.+)', line)
+    if not m:
+        return None
+
+    remainder = m.group(1)          # everything after the time + whitespace
+    parts = remainder.split("/")    # split on forward slashes
+
+    if not parts or not parts[0]:
+        return None
+
+    first = parts[0].strip()
+
+    # check if first token is a country name (normalise - and _ for comparison)
+    def _norm(s: str) -> str:
+        return s.replace("-", "_").lower()
+
+    if _norm(first) in {_norm(c) for c in _COUNTRY_NAMES}:
+        # country found — take the next token (between 1st and 2nd slash)
+        if len(parts) >= 2 and parts[1].strip():
+            return parts[1].strip()
+        return None
+
+    return first
+
+
 
 
 def extract_kdm_country(line: str) -> str:
