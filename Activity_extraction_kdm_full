@@ -37,37 +37,46 @@ def extract_segment(line: str) -> str | None:
 
 def extract_kdm_code(line: str) -> tuple[str, str] | None:
     """
-    From a KDM activity line return (code, full_name).
-    full_name = everything after the last slash, unchanged.
-    code      = full_name with '_KDM' removed (case-insensitive).
-    Returns None if there's no slash.
+    From a KDM activity line return (code, full_line).
+    full_line = the entire original line (stripped), used as the full name in the report.
+    code      = substring after the last slash, with '_KDM' / '-KDM' suffix removed.
+    Returns None if the line is empty.
     """
     line = line.strip()
     if not line:
         return None
     idx = line.rfind("/")
-    if idx == -1:
-        full_name = line
-    else:
-        full_name = line[idx + 1:]
-    code = full_name.replace("_KDM", "").replace("_kdm", "")
-    return code, full_name
+    suffix = line[idx + 1:] if idx != -1 else line
+    import re
+    code = re.sub(r'[_\-]KDM$', '', suffix, flags=re.IGNORECASE)
+    return code, line          # full_line is the complete original string
 
 
-def load_kdm_file(path: str) -> dict[str, str]:
-    """Return {code: full_name} from the KDM activities file."""
-    result: dict[str, str] = {}
+def _normalise(s: str) -> str:
+    """Collapse dashes and underscores to a single canonical character for comparison."""
+    return s.replace("-", "_")
+
+
+def load_kdm_file(path: str) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Return:
+      exact_map   : {original_code: full_line}
+      normal_map  : {normalised_code: full_line}  — for fuzzy dash/underscore matching
+    """
+    exact_map:  dict[str, str] = {}
+    normal_map: dict[str, str] = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             for raw in fh:
                 parsed = extract_kdm_code(raw.rstrip("\n\r"))
                 if parsed:
-                    code, full_name = parsed
+                    code, full_line = parsed
                     if code:
-                        result[code] = full_name
+                        exact_map[code] = full_line
+                        normal_map[_normalise(code)] = full_line
     except Exception:
         pass
-    return result
+    return exact_map, normal_map
 
 
 # ── main file analysis ────────────────────────────────────────────────────────
@@ -101,19 +110,32 @@ def analyse_file(path: str, progress_cb, done_cb):
 
 def match_against_kdm(
     segments: list[str],
-    kdm: dict[str, str]
+    exact_map: dict[str, str],
+    normal_map: dict[str, str],
 ) -> dict[str, tuple[str, str, str]]:
     """
     For each segment try to find a KDM match.
-    Returns {segment: (matched_code, full_name, method)}
+    1. Exact match first.
+    2. Normalised match (dashes == underscores) if no exact hit.
+    Returns {segment: (matched_code, full_line, method)}
     method is "Automatically" or "" (blank = no match found yet).
     """
     result: dict[str, tuple[str, str, str]] = {}
     for seg in segments:
-        if seg in kdm:
-            result[seg] = (seg, kdm[seg], "Automatically")
+        if seg in exact_map:
+            result[seg] = (seg, exact_map[seg], "Automatically")
         else:
-            result[seg] = ("", "", "")
+            norm_seg = _normalise(seg)
+            if norm_seg in normal_map:
+                # recover the original KDM code from exact_map by reverse lookup
+                matched_full = normal_map[norm_seg]
+                # find the original code whose normalised form matches
+                orig_code = next(
+                    (k for k, v in exact_map.items() if v == matched_full), seg
+                )
+                result[seg] = (orig_code, matched_full, "Automatically")
+            else:
+                result[seg] = ("", "", "")
     return result
 
 
@@ -161,14 +183,15 @@ def _hdr(ws, row_num, labels, bg_hex):
 
 # ── Excel export ──────────────────────────────────────────────────────────────
 
-def export_excel(out_path: str, results: dict, kdm: dict[str, str]):
+def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
     matched: collections.Counter = results["matched"]
     unmatched: list               = results["unmatched"]
     total: int                    = results["total"]
     matched_total                 = sum(matched.values())
 
+    exact_map, normal_map = kdm
     segments_ranked = [seg for seg, _ in matched.most_common()]
-    kdm_lookup      = match_against_kdm(segments_ranked, kdm)
+    kdm_lookup      = match_against_kdm(segments_ranked, exact_map, normal_map)
 
     wb = Workbook()
 
@@ -190,7 +213,7 @@ def export_excel(out_path: str, results: dict, kdm: dict[str, str]):
     d.font      = _font(size=9, color="555555")
     d.alignment = _centre()
 
-    kdm_loaded = len(kdm)
+    kdm_loaded = len(exact_map)
     auto_matched = sum(1 for v in kdm_lookup.values() if v[2] == "Automatically")
 
     _hdr(ws, 3, ["Metric", "Value", "Notes"], C_DARK_BLUE)
@@ -315,7 +338,7 @@ class App(tk.Tk):
         self.geometry("960x740")
         self.resizable(True, True)
         self._results  = None
-        self._kdm      = {}        # {code: full_name}
+        self._kdm      = ({}, {})  # (exact_map, normal_map)
         self._build_ui()
 
     # ── layout ────────────────────────────────────────────────────────────────
@@ -413,7 +436,7 @@ class App(tk.Tk):
             return
         self.kdm_var.set(path)
         self._kdm = load_kdm_file(path)
-        n = len(self._kdm)
+        n = len(self._kdm[0])
         self.kdm_status.config(
             text=f"✓ {n} activities loaded",
             fg="#2E7D32" if n else "red"
@@ -460,7 +483,7 @@ class App(tk.Tk):
         total: int                    = results["total"]
 
         kdm_lookup = match_against_kdm(
-            [seg for seg, _ in matched.most_common()], self._kdm
+            [seg for seg, _ in matched.most_common()], self._kdm[0], self._kdm[1]
         )
 
         for seg, cnt in matched.most_common():
@@ -521,7 +544,7 @@ class App(tk.Tk):
         self.export_btn.config(state="disabled")
         self.status_var.set("Generating Excel report…")
 
-        kdm_snapshot = dict(self._kdm)
+        kdm_snapshot = (dict(self._kdm[0]), dict(self._kdm[1]))
 
         def do_export():
             try:
