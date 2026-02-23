@@ -108,34 +108,50 @@ def analyse_file(path: str, progress_cb, done_cb):
 
 # ── KDM matching ──────────────────────────────────────────────────────────────
 
+import re as _re
+_DIMENSION_SUFFIX = _re.compile(r'[-_][23]D$', _re.IGNORECASE)
+
+
+def _lookup(seg: str, exact_map: dict, normal_map: dict):
+    """Try exact then normalised lookup. Return (orig_code, full_line) or None."""
+    if seg in exact_map:
+        return seg, exact_map[seg]
+    norm = _normalise(seg)
+    if norm in normal_map:
+        full_line = normal_map[norm]
+        orig_code = next((k for k, v in exact_map.items() if v == full_line), seg)
+        return orig_code, full_line
+    return None
+
+
 def match_against_kdm(
     segments: list[str],
     exact_map: dict[str, str],
     normal_map: dict[str, str],
 ) -> dict[str, tuple[str, str, str]]:
     """
-    For each segment try to find a KDM match.
-    1. Exact match first.
-    2. Normalised match (dashes == underscores) if no exact hit.
+    Three-tier KDM matching per segment:
+    1. Exact match                          → "Automatically"
+    2. Normalised match (- == _)            → "Automatically"
+    3. Strip trailing -2D/-3D/_2D/_3D
+       then repeat 1+2                      → "Semi-automatically"
     Returns {segment: (matched_code, full_line, method)}
-    method is "Automatically" or "" (blank = no match found yet).
     """
     result: dict[str, tuple[str, str, str]] = {}
     for seg in segments:
-        if seg in exact_map:
-            result[seg] = (seg, exact_map[seg], "Automatically")
-        else:
-            norm_seg = _normalise(seg)
-            if norm_seg in normal_map:
-                # recover the original KDM code from exact_map by reverse lookup
-                matched_full = normal_map[norm_seg]
-                # find the original code whose normalised form matches
-                orig_code = next(
-                    (k for k, v in exact_map.items() if v == matched_full), seg
-                )
-                result[seg] = (orig_code, matched_full, "Automatically")
-            else:
-                result[seg] = ("", "", "")
+        hit = _lookup(seg, exact_map, normal_map)
+        if hit:
+            result[seg] = (hit[0], hit[1], "Automatically")
+            continue
+
+        stripped = _DIMENSION_SUFFIX.sub('', seg)
+        if stripped != seg:
+            hit2 = _lookup(stripped, exact_map, normal_map)
+            if hit2:
+                result[seg] = (hit2[0], hit2[1], "Semi-automatically")
+                continue
+
+        result[seg] = ("", "", "")
     return result
 
 
