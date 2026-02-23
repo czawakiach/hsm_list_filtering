@@ -167,7 +167,8 @@ C_ALT_GREEN  = "E8F5E9"
 C_ALT_ORANGE = "FFF3E0"
 C_ALT_TEAL   = "E0F2F1"
 C_TOTALS     = "CFD8DC"
-C_AUTO_MATCH = "C8E6C9"   # light green highlight for auto-matched rows
+C_AUTO_MATCH = "C8E6C9"   # light green  — automatically matched rows
+C_SEMI_MATCH = "FFF9C4"   # light yellow — semi-automatically matched rows
 
 thin   = Side(style="thin", color="BDBDBD")
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -231,6 +232,7 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
 
     kdm_loaded = len(exact_map)
     auto_matched = sum(1 for v in kdm_lookup.values() if v[2] == "Automatically")
+    semi_matched = sum(1 for v in kdm_lookup.values() if v[2] == "Semi-automatically")
 
     _hdr(ws, 3, ["Metric", "Value", "Notes"], C_DARK_BLUE)
     summary_rows = [
@@ -243,9 +245,10 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
          "Percentage of lines that yielded a segment"),
         ("KDM activities loaded",       kdm_loaded,     "Entries read from KDM file"),
         ("Auto-matched to KDM",         auto_matched,   "Segments matched automatically"),
+        ("Semi-auto matched to KDM",    semi_matched,   "Segments matched after stripping -2D/-3D suffix"),
         ("Pending manual review",
-         len(matched) - auto_matched,
-         "Segments with no auto-match — fill in Excel"),
+         len(matched) - auto_matched - semi_matched,
+         "Segments with no match yet — fill in Excel"),
     ]
     for r_idx, (label, value, note) in enumerate(summary_rows, 4):
         bg = C_ALT_GREEN if r_idx % 2 == 0 else "FFFFFF"
@@ -275,9 +278,12 @@ def export_excel(out_path: str, results: dict, kdm: tuple[dict, dict]):
         kdm_code, kdm_full, method = kdm_lookup.get(seg, ("", "", ""))
         is_auto = method == "Automatically"
 
-        # rows with an auto-match get a light-green tint; others alternate blue/white
+        is_semi = method == "Semi-automatically"
+        # green=auto, yellow=semi-auto, alternating blue/white=no match
         if is_auto:
             bg = C_AUTO_MATCH
+        elif is_semi:
+            bg = C_SEMI_MATCH
         else:
             bg = C_ALT_BLUE if i % 2 == 0 else "FFFFFF"
 
