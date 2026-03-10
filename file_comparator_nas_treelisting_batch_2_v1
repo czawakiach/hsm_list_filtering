@@ -1,0 +1,391 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import os
+import time
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+
+class FileComparatorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Substring Comparator")
+        self.root.geometry("750x620")
+        self.root.resizable(True, True)
+
+        self.file_paths = {"nas2hsm": tk.StringVar(), "treelisting": tk.StringVar(), "files_log": tk.StringVar()}
+        self.output_path = tk.StringVar()
+
+        self._build_ui()
+
+    def _build_ui(self):
+        main = ttk.Frame(self.root, padding=15)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # Title
+        ttk.Label(main, text="File Substring Comparator", font=("Arial", 16, "bold")).pack(pady=(0, 10))
+        ttk.Label(main, text="Compare filenames from nas2hsm against treelisting and files_log",
+                  font=("Arial", 9)).pack(pady=(0, 15))
+
+        # File selection
+        files_frame = ttk.LabelFrame(main, text="Input Files", padding=10)
+        files_frame.pack(fill=tk.X, pady=(0, 10))
+
+        file_labels = [
+            ("nas2hsm (main file):", "nas2hsm"),
+            ("treelisting.txt (Batch 1):", "treelisting"),
+            ("files_log.log (Batch 2):", "files_log"),
+        ]
+        for label_text, key in file_labels:
+            row = ttk.Frame(files_frame)
+            row.pack(fill=tk.X, pady=3)
+            ttk.Label(row, text=label_text, width=28, anchor="w").pack(side=tk.LEFT)
+            ttk.Entry(row, textvariable=self.file_paths[key], width=45).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+            ttk.Button(row, text="Browse", command=lambda k=key: self._browse(k)).pack(side=tk.RIGHT)
+
+        # Output
+        out_frame = ttk.LabelFrame(main, text="Output", padding=10)
+        out_frame.pack(fill=tk.X, pady=(0, 10))
+        out_row = ttk.Frame(out_frame)
+        out_row.pack(fill=tk.X)
+        ttk.Label(out_row, text="Save report as:", width=28, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(out_row, textvariable=self.output_path, width=45).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(out_row, text="Browse", command=self._browse_output).pack(side=tk.RIGHT)
+
+        # Run button
+        self.run_btn = ttk.Button(main, text="Run Comparison", command=self._run)
+        self.run_btn.pack(pady=10)
+
+        # Progress
+        self.progress = ttk.Progressbar(main, mode='determinate', length=400)
+        self.progress.pack(pady=(0, 5))
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(main, textvariable=self.status_var, font=("Arial", 9)).pack()
+
+        # Log
+        log_frame = ttk.LabelFrame(main, text="Log", padding=5)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        self.log_text = tk.Text(log_frame, height=10, font=("Consolas", 9), state=tk.DISABLED, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+    def _browse(self, key):
+        path = filedialog.askopenfilename(title=f"Select {key} file",
+                                          filetypes=[("All files", "*.*"), ("Text files", "*.txt"), ("Log files", "*.log")])
+        if path:
+            self.file_paths[key].set(path)
+
+    def _browse_output(self):
+        path = filedialog.asksaveasfilename(title="Save report as",
+                                            defaultextension=".xlsx",
+                                            filetypes=[("Excel files", "*.xlsx")])
+        if path:
+            self.output_path.set(path)
+
+    def _log(self, msg):
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.insert(tk.END, msg + "\n")
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+    def _update_progress(self, value, status_text=None):
+        self.progress['value'] = value
+        if status_text:
+            self.status_var.set(status_text)
+        self.root.update_idletasks()
+
+    def _run(self):
+        for key, var in self.file_paths.items():
+            if not var.get():
+                messagebox.showerror("Missing file", f"Please select the {key} file.")
+                return
+        if not self.output_path.get():
+            messagebox.showerror("Missing output", "Please specify an output file path.")
+            return
+
+        self.run_btn.configure(state=tk.DISABLED)
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+        threading.Thread(target=self._process, daemon=True).start()
+
+    def _extract_nas2hsm(self, filepath):
+        """Extract substring after last '/' from each line."""
+        results = []
+        raw_lines = []
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                raw_lines.append(line)
+                if '/' in line:
+                    results.append(line.rsplit('/', 1)[-1])
+                else:
+                    results.append(line)
+        return results, raw_lines
+
+    def _extract_treelisting(self, filepath):
+        """Extract filenames (lines NOT ending with '/') stripped of whitespace."""
+        results = set()
+        total = 0
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                total += 1
+                if not stripped.endswith('/'):
+                    results.add(stripped.lower())
+        return results, total
+
+    def _extract_files_log(self, filepath):
+        """Extract substring after last '/' from each line."""
+        results = set()
+        total = 0
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                total += 1
+                if '/' in stripped:
+                    results.add(stripped.rsplit('/', 1)[-1].lower())
+                else:
+                    results.add(stripped.lower())
+        return results, total
+
+    def _process(self):
+        try:
+            start = time.time()
+
+            # Step 1: Parse nas2hsm
+            self.root.after(0, self._update_progress, 5, "Parsing nas2hsm...")
+            self.root.after(0, self._log, "Parsing nas2hsm (main file)...")
+            nas_filenames, nas_raw_lines = self._extract_nas2hsm(self.file_paths["nas2hsm"].get())
+            self.root.after(0, self._log, f"  -> {len(nas_filenames):,} entries extracted")
+
+            # Step 2: Parse treelisting
+            self.root.after(0, self._update_progress, 25, "Parsing treelisting.txt...")
+            self.root.after(0, self._log, "Parsing treelisting.txt (Batch 1)...")
+            tree_set, tree_total = self._extract_treelisting(self.file_paths["treelisting"].get())
+            self.root.after(0, self._log, f"  -> {tree_total:,} total lines, {len(tree_set):,} unique filenames (folders excluded)")
+
+            # Step 3: Parse files_log
+            self.root.after(0, self._update_progress, 45, "Parsing files_log.log...")
+            self.root.after(0, self._log, "Parsing files_log.log (Batch 2)...")
+            log_set, log_total = self._extract_files_log(self.file_paths["files_log"].get())
+            self.root.after(0, self._log, f"  -> {log_total:,} total lines, {len(log_set):,} unique filenames")
+
+            # Step 4: Compare using hash lookup
+            self.root.after(0, self._update_progress, 60, "Comparing (hash lookup)...")
+            self.root.after(0, self._log, "Running hash-based comparison...")
+
+            matched_both = []
+            matched_tree_only = []
+            matched_log_only = []
+            unmatched = []
+
+            for i, fname in enumerate(nas_filenames):
+                fname_lower = fname.lower()
+                in_tree = fname_lower in tree_set
+                in_log = fname_lower in log_set
+
+                row_data = (nas_raw_lines[i], fname, in_tree, in_log)
+
+                if in_tree and in_log:
+                    matched_both.append(row_data)
+                elif in_tree and not in_log:
+                    matched_tree_only.append(row_data)
+                elif not in_tree and in_log:
+                    matched_log_only.append(row_data)
+                else:
+                    unmatched.append(row_data)
+
+            total = len(nas_filenames)
+            self.root.after(0, self._log, f"\nResults:")
+            self.root.after(0, self._log, f"  Matched in BOTH files:        {len(matched_both):,}")
+            self.root.after(0, self._log, f"  Matched in treelisting ONLY:  {len(matched_tree_only):,}")
+            self.root.after(0, self._log, f"  Matched in files_log ONLY:    {len(matched_log_only):,}")
+            self.root.after(0, self._log, f"  NOT matched in either:        {len(unmatched):,}")
+
+            # Step 5: Generate Excel report
+            self.root.after(0, self._update_progress, 75, "Generating Excel report...")
+            self.root.after(0, self._log, "\nGenerating Excel report...")
+
+            wb = Workbook()
+            header_font = Font(bold=True, color="FFFFFF", size=11, name="Arial")
+            header_fill = PatternFill("solid", fgColor="2F5496")
+            header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell_font = Font(name="Arial", size=10)
+            thin_border = Border(
+                left=Side(style='thin', color='D9D9D9'),
+                right=Side(style='thin', color='D9D9D9'),
+                top=Side(style='thin', color='D9D9D9'),
+                bottom=Side(style='thin', color='D9D9D9')
+            )
+            green_fill = PatternFill("solid", fgColor="C6EFCE")
+            red_fill = PatternFill("solid", fgColor="FFC7CE")
+            yellow_fill = PatternFill("solid", fgColor="FFEB9C")
+
+            # --- Summary Sheet ---
+            ws_summary = wb.active
+            ws_summary.title = "Summary"
+            ws_summary.sheet_properties.tabColor = "2F5496"
+
+            summary_headers = ["Metric", "Value"]
+            for col, h in enumerate(summary_headers, 1):
+                cell = ws_summary.cell(row=1, column=col, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_align
+                cell.border = thin_border
+
+            metrics = [
+                ("Total entries in nas2hsm (main file)", total),
+                ("Unique filenames in treelisting (Batch 1)", len(tree_set)),
+                ("Unique filenames in files_log (Batch 2)", len(log_set)),
+                ("", ""),
+                ("Matched in BOTH Batch 1 & Batch 2", len(matched_both)),
+                ("Matched in Batch 1 (treelisting) ONLY", len(matched_tree_only)),
+                ("Matched in Batch 2 (files_log) ONLY", len(matched_log_only)),
+                ("NOT matched in either batch", len(unmatched)),
+                ("", ""),
+                ("Match rate - Batch 1 (treelisting)", f"{(len(matched_both) + len(matched_tree_only)) / total * 100:.2f}%" if total else "N/A"),
+                ("Match rate - Batch 2 (files_log)", f"{(len(matched_both) + len(matched_log_only)) / total * 100:.2f}%" if total else "N/A"),
+                ("Match rate - Both batches", f"{len(matched_both) / total * 100:.2f}%" if total else "N/A"),
+                ("Unmatched rate", f"{len(unmatched) / total * 100:.2f}%" if total else "N/A"),
+                ("", ""),
+                ("Matched at least once", len(matched_both) + len(matched_tree_only) + len(matched_log_only)),
+                ("Matched at least once (%)", f"{(len(matched_both) + len(matched_tree_only) + len(matched_log_only)) / total * 100:.2f}%" if total else "N/A"),
+            ]
+
+            for r, (metric, value) in enumerate(metrics, 2):
+                c1 = ws_summary.cell(row=r, column=1, value=metric)
+                c2 = ws_summary.cell(row=r, column=2, value=value)
+                c1.font = cell_font
+                c2.font = Font(name="Arial", size=10, bold=True)
+                c1.border = thin_border
+                c2.border = thin_border
+                c2.alignment = Alignment(horizontal="right")
+
+            ws_summary.column_dimensions['A'].width = 45
+            ws_summary.column_dimensions['B'].width = 20
+
+            # --- Unmatched Sheet (not found in either) ---
+            ws_unmatched = wb.create_sheet("Unmatched (Neither)")
+            ws_unmatched.sheet_properties.tabColor = "FF0000"
+            un_headers = ["Row #", "Original Path (nas2hsm)", "Extracted Filename"]
+            for col, h in enumerate(un_headers, 1):
+                cell = ws_unmatched.cell(row=1, column=col, value=h)
+                cell.font = header_font
+                cell.fill = PatternFill("solid", fgColor="C00000")
+                cell.alignment = header_align
+                cell.border = thin_border
+
+            for r, (raw, fname, _, _) in enumerate(unmatched, 2):
+                ws_unmatched.cell(row=r, column=1, value=r - 1).font = cell_font
+                ws_unmatched.cell(row=r, column=2, value=raw).font = cell_font
+                ws_unmatched.cell(row=r, column=3, value=fname).font = cell_font
+                for c in range(1, 4):
+                    ws_unmatched.cell(row=r, column=c).border = thin_border
+                    ws_unmatched.cell(row=r, column=c).fill = red_fill
+
+            ws_unmatched.column_dimensions['A'].width = 10
+            ws_unmatched.column_dimensions['B'].width = 80
+            ws_unmatched.column_dimensions['C'].width = 50
+
+            # --- Matched Once Sheet (treelisting only OR files_log only) ---
+            ws_once = wb.create_sheet("Matched Once Only")
+            ws_once.sheet_properties.tabColor = "FFC000"
+            once_headers = ["Row #", "Original Path (nas2hsm)", "Extracted Filename", "Found In"]
+            for col, h in enumerate(once_headers, 1):
+                cell = ws_once.cell(row=1, column=col, value=h)
+                cell.font = header_font
+                cell.fill = PatternFill("solid", fgColor="BF8F00")
+                cell.alignment = header_align
+                cell.border = thin_border
+
+            row_num = 2
+            for raw, fname, in_tree, in_log in matched_tree_only:
+                ws_once.cell(row=row_num, column=1, value=row_num - 1).font = cell_font
+                ws_once.cell(row=row_num, column=2, value=raw).font = cell_font
+                ws_once.cell(row=row_num, column=3, value=fname).font = cell_font
+                ws_once.cell(row=row_num, column=4, value="Batch 1 (treelisting) only").font = cell_font
+                for c in range(1, 5):
+                    ws_once.cell(row=row_num, column=c).border = thin_border
+                    ws_once.cell(row=row_num, column=c).fill = yellow_fill
+                row_num += 1
+
+            for raw, fname, in_tree, in_log in matched_log_only:
+                ws_once.cell(row=row_num, column=1, value=row_num - 1).font = cell_font
+                ws_once.cell(row=row_num, column=2, value=raw).font = cell_font
+                ws_once.cell(row=row_num, column=3, value=fname).font = cell_font
+                ws_once.cell(row=row_num, column=4, value="Batch 2 (files_log) only").font = cell_font
+                for c in range(1, 5):
+                    ws_once.cell(row=row_num, column=c).border = thin_border
+                    ws_once.cell(row=row_num, column=c).fill = yellow_fill
+                row_num += 1
+
+            ws_once.column_dimensions['A'].width = 10
+            ws_once.column_dimensions['B'].width = 80
+            ws_once.column_dimensions['C'].width = 50
+            ws_once.column_dimensions['D'].width = 30
+
+            # --- Matched Both Sheet ---
+            ws_both = wb.create_sheet("Matched Both")
+            ws_both.sheet_properties.tabColor = "00B050"
+            both_headers = ["Row #", "Original Path (nas2hsm)", "Extracted Filename"]
+            for col, h in enumerate(both_headers, 1):
+                cell = ws_both.cell(row=1, column=col, value=h)
+                cell.font = header_font
+                cell.fill = PatternFill("solid", fgColor="00B050")
+                cell.alignment = header_align
+                cell.border = thin_border
+
+            for r, (raw, fname, _, _) in enumerate(matched_both, 2):
+                ws_both.cell(row=r, column=1, value=r - 1).font = cell_font
+                ws_both.cell(row=r, column=2, value=raw).font = cell_font
+                ws_both.cell(row=r, column=3, value=fname).font = cell_font
+                for c in range(1, 4):
+                    ws_both.cell(row=r, column=c).border = thin_border
+                    ws_both.cell(row=r, column=c).fill = green_fill
+
+            ws_both.column_dimensions['A'].width = 10
+            ws_both.column_dimensions['B'].width = 80
+            ws_both.column_dimensions['C'].width = 50
+
+            # Add autofilter to all data sheets
+            for ws in [ws_unmatched, ws_once, ws_both]:
+                if ws.max_row > 1:
+                    ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+
+            # Freeze top row
+            for ws in [ws_summary, ws_unmatched, ws_once, ws_both]:
+                ws.freeze_panes = "A2"
+
+            output = self.output_path.get()
+            wb.save(output)
+
+            elapsed = time.time() - start
+            self.root.after(0, self._update_progress, 100, "Done!")
+            self.root.after(0, self._log, f"\nReport saved to: {output}")
+            self.root.after(0, self._log, f"Completed in {elapsed:.2f} seconds")
+            self.root.after(0, lambda: messagebox.showinfo("Done", f"Report saved!\n\nTime: {elapsed:.2f}s\nMatched both: {len(matched_both):,}\nMatched once: {len(matched_tree_only) + len(matched_log_only):,}\nUnmatched: {len(unmatched):,}"))
+
+        except Exception as e:
+            self.root.after(0, self._log, f"\nERROR: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+        finally:
+            self.root.after(0, lambda: self.run_btn.configure(state=tk.NORMAL))
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = FileComparatorApp(root)
+    root.mainloop()
