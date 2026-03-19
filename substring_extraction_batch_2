@@ -6,7 +6,7 @@ from openpyxl.styles import Font, Alignment, PatternFill
 import os
 
 def sanitize_non_ascii(text):
-    return re.sub(r'[^\x00-\x7F]', '?', text)
+    return re.sub(r'[^\x00-\x7F]', '_', text)
 
 def extract_after_last_slash(lines):
     results = []
@@ -65,7 +65,7 @@ class App:
         frame.pack(fill='both', expand=True)
 
         tk.Label(frame, text="HSM-KDM Log Extractor", font=("Arial", 14, "bold")).pack(pady=(0, 10))
-        tk.Label(frame, text="Extracts text after the last '/' in each line.\nReplaces non-ASCII characters with '?'.",
+        tk.Label(frame, text="Extracts text after the last '/' in each line.\nReplaces non-ASCII characters with '_'.",
                  font=("Arial", 9), justify='center').pack(pady=(0, 15))
 
         btn_frame = tk.Frame(frame)
