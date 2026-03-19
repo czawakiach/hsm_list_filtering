@@ -1,0 +1,119 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import re
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill
+import os
+
+def sanitize_non_ascii(text):
+    return re.sub(r'[^\x00-\x7F]', '?', text)
+
+def extract_after_last_slash(lines):
+    results = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if '/' in line:
+            extracted = line.rsplit('/', 1)[-1]
+        else:
+            extracted = line
+        results.append(sanitize_non_ascii(extracted))
+    return results
+
+def process_file(input_path, output_path):
+    with open(input_path, 'r', encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+
+    results = extract_after_last_slash(lines)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Extracted"
+
+    header_font = Font(name='Arial', bold=True, color='FFFFFF', size=11)
+    header_fill = PatternFill('solid', fgColor='4472C4')
+    header_align = Alignment(horizontal='center', vertical='center')
+    cell_font = Font(name='Arial', size=11)
+
+    ws['A1'] = '#'
+    ws['B1'] = 'Extracted Value'
+    for cell in [ws['A1'], ws['B1']]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    for i, val in enumerate(results, start=2):
+        ws.cell(row=i, column=1, value=i - 1).font = cell_font
+        ws.cell(row=i, column=2, value=val).font = cell_font
+
+    ws.column_dimensions['A'].width = 8
+    ws.column_dimensions['B'].width = 80
+    ws.auto_filter.ref = f"A1:B{len(results) + 1}"
+
+    wb.save(output_path)
+    return len(results)
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("HSM-KDM Log Extractor")
+        self.root.geometry("520x260")
+        self.root.resizable(False, False)
+
+        frame = tk.Frame(root, padx=20, pady=20)
+        frame.pack(fill='both', expand=True)
+
+        tk.Label(frame, text="HSM-KDM Log Extractor", font=("Arial", 14, "bold")).pack(pady=(0, 10))
+        tk.Label(frame, text="Extracts text after the last '/' in each line.\nReplaces non-ASCII characters with '?'.",
+                 font=("Arial", 9), justify='center').pack(pady=(0, 15))
+
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(fill='x', pady=5)
+
+        self.input_path = tk.StringVar()
+        tk.Entry(btn_frame, textvariable=self.input_path, width=45, state='readonly').pack(side='left', padx=(0, 5))
+        tk.Button(btn_frame, text="Browse...", command=self.browse_file).pack(side='left')
+
+        tk.Button(frame, text="Extract & Save as Excel", font=("Arial", 10, "bold"),
+                  command=self.run, width=25, bg='#4472C4', fg='white').pack(pady=15)
+
+        self.status = tk.Label(frame, text="", font=("Arial", 9), fg='green')
+        self.status.pack()
+
+    def browse_file(self):
+        path = filedialog.askopenfilename(
+            title="Select log file",
+            filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if path:
+            self.input_path.set(path)
+
+    def run(self):
+        input_path = self.input_path.get()
+        if not input_path:
+            messagebox.showwarning("No file", "Please select an input file first.")
+            return
+
+        default_name = os.path.splitext(os.path.basename(input_path))[0] + "_extracted.xlsx"
+        output_path = filedialog.asksaveasfilename(
+            title="Save Excel file as",
+            defaultextension=".xlsx",
+            initialfile=default_name,
+            filetypes=[("Excel files", "*.xlsx")]
+        )
+        if not output_path:
+            return
+
+        try:
+            count = process_file(input_path, output_path)
+            self.status.config(text=f"Done! {count} entries saved to Excel.", fg='green')
+            messagebox.showinfo("Success", f"Extracted {count} entries.\nSaved to:\n{output_path}")
+        except Exception as e:
+            self.status.config(text="Error occurred.", fg='red')
+            messagebox.showerror("Error", str(e))
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
