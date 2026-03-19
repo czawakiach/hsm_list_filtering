@@ -5,8 +5,14 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
 import os
 
-def sanitize_non_ascii(text):
-    return re.sub(r'[^\x00-\x7F]', '_', text)
+ILLEGAL_XML_RE = re.compile(
+    r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff\ufdd0-\ufdef\ufffe\uffff]'
+)
+
+def sanitize_for_excel(text):
+    text = ILLEGAL_XML_RE.sub('', text)
+    text = text.encode('ascii', errors='ignore').decode('ascii')
+    return text
 
 def extract_after_last_slash(lines):
     results = []
@@ -18,7 +24,7 @@ def extract_after_last_slash(lines):
             extracted = line.rsplit('/', 1)[-1]
         else:
             extracted = line
-        results.append(sanitize_non_ascii(extracted))
+        results.append(sanitize_for_excel(extracted))
     return results
 
 def process_file(input_path, output_path):
@@ -65,7 +71,7 @@ class App:
         frame.pack(fill='both', expand=True)
 
         tk.Label(frame, text="HSM-KDM Log Extractor", font=("Arial", 14, "bold")).pack(pady=(0, 10))
-        tk.Label(frame, text="Extracts text after the last '/' in each line.\nReplaces non-ASCII characters with '_'.",
+        tk.Label(frame, text="Extracts text after the last '/' in each line.\nStrips non-ASCII characters for Excel compatibility.",
                  font=("Arial", 9), justify='center').pack(pady=(0, 15))
 
         btn_frame = tk.Frame(frame)
