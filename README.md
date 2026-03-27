@@ -158,4 +158,61 @@ pip install openpyxl
 
 ---
 
+Q&A
+
+Data integrity & gaps
+Gap
+What happens to files that were unmatched at the end of reconciliation — were they investigated further or accepted as lost?
+The README confirms all tapes were reconciled and decommissioned, but does not describe what decision was made for the unmatched entries. Were they escalated, written off, or re-checked manually? This matters if any audit trail is required later.
+Gap
+Do the final Excel outputs still exist, and where are they stored?
+The README says outputs are Excel reports, but gives no file paths, SharePoint location, network drive, or archive location. Without these, the reconciliation results exist only in the code — the actual conclusions are invisible.
+Gap
+How did discrepancies between the analyst's results and the coworker's results get resolved?
+compare_with_coworker.py identifies entries that appear in only one analyst's results. The README doesn't say what happened next — was there a tiebreaker rule, a manual review step, or a senior sign-off? The process ends at "difference report."
+
+Input data
+Input
+What is the exact format of the HSM export, and is that export still accessible?
+Several tools rely on a specific HSM line structure — particularly the date-detection heuristic used to strip metadata. An example line or format spec would help anyone re-running or extending the tools. It's also unclear whether the HSM export is a live system or a frozen snapshot.
+Input
+Where do the tape file listings (.txt files) come from, and are they still available?
+The tape listings are the primary input for every tool, but there's no mention of who generated them, from what system, or whether they've been archived. If a dispute arises about a specific tape, the ability to re-run the comparison depends on these files still existing.
+Input
+What is the KDM activity reference file, and is it current?
+The activity mapping tools reference a KDM file but give no detail about its format, version, or provenance. If the file changes or goes missing, the mapping phase can't be reproduced.
+
+Matching logic
+Logic
+Which tool and which matching strategy was used for the final, authoritative reconciliation result?
+There are four batch processors for Batch 1 alone (compare_files, multiple_process, Tape_batch_processor, tape_batch_processor_hash) and three UD comparison variants for Batch 2. The README doesn't state which outputs were treated as definitive. Was it always the hash-indexed version? Was advanced_comparison used in single or dual mode?
+Logic
+What value was used for the "minimum character threshold" in the hash-indexed tool, and why?
+The README mentions a configurable threshold to skip short/junk entries but doesn't document what value was chosen. A different threshold would produce a different match rate. This is effectively a tuning parameter that belongs in the output report or a config file.
+Logic
+What's the known false positive/negative rate for the final matching approach?
+The Known Limitations section flags that filename-only matching can produce false positives, and that the N-chars method can miss matches. Was any sample validation done to estimate how often this happened in practice?
+
+Business & operational context
+Context
+What does "decommissioned" mean in practice — were the physical tapes destroyed, returned, or archived offsite?
+The README says tapes "can be decommissioned" but doesn't confirm this happened or describe the physical disposition. If a data recovery request ever came in, knowing whether the media was destroyed or warehoused is essential.
+Context
+What triggered this reconciliation in 2024 — a regulatory requirement, a storage cost reduction, or something else?
+Understanding the original business driver would clarify what "good enough" meant for the match rate, whether a formal sign-off was needed, and whether there are compliance obligations that outlive the project.
+Context
+Who was the coworker involved in cross-comparison, and are they still available?
+The cross-comparison step implies a second person ran a parallel analysis. Their methodology, contact, and archived outputs are relevant if questions arise about discrepancies — but there's no mention of who they were.
+
+Reproducibility & ops
+Ops
+Is there a sample dataset or test fixture to verify the tools still work correctly?
+With 22 scripts and no tests mentioned, there's no quick way to confirm the tools still behave as expected after a Python version upgrade or environment change. A small synthetic HSM file and a known-good tape listing would serve as a smoke test.
+Ops
+Can the deprecated prototype scripts (compare_files, multiple_process) be safely removed?
+The README describes several scripts as early prototypes superseded by faster versions. It's unclear whether any of them were used in the final outputs or whether they're purely historical. Keeping them risks confusion; removing them risks losing context about why the later tools were designed the way they were.
+Ops
+Is the Russian-data investigation (Phase 4) complete, and what was the outcome?
+Three scripts are dedicated to finding and validating Russian-region data, including a manual interactive review step. The README doesn't say what was found, whether the review was completed, or whether the result fed into the main reconciliation or was a separate deliverable.
+
 *Last updated: March 2026*
